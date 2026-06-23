@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
-import { ChallengeRenderer } from "@/components/turtle"
+import { TurtlePreviewPanel } from "@/components/turtle"
 import { useStudentEvents } from "@/hooks/use-student-events"
 import { reactBlocklyToolboxCategories, registerTurtleBlocks } from "@/lib/blockly"
 import { studentApi, studentErrorMessage } from "@/lib/student/api"
@@ -47,7 +47,6 @@ export default function ChallengePlayPage() {
   const { challengeId } = useParams<{ challengeId: string }>()
   const queryClient = useQueryClient()
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
-  const [workspaceXml, setWorkspaceXml] = useState(EMPTY_WORKSPACE_XML)
   const [previewProgram, setPreviewProgram] = useState<unknown | null>(null)
   const [animationKey, setAnimationKey] = useState(0)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -89,8 +88,7 @@ export default function ChallengePlayPage() {
         createSubmission: studentApi.createSubmission,
       })
     },
-    onSuccess: async ({ xml, program }) => {
-      setWorkspaceXml(xml)
+    onSuccess: async ({ program }) => {
       setPreviewProgram(program)
       setAnimationKey((key) => key + 1)
       setActionError(null)
@@ -121,13 +119,38 @@ export default function ChallengePlayPage() {
   )
   const solved = challenge.data?.status === "solved" || currentSubmissions.some((submission) => submission.passed)
   const isWorkspaceReady = Boolean(workspace && challenge.data)
+  const blocklyWorkspaceConfiguration = useMemo(
+    () => ({
+      trashcan: true,
+      scrollbars: true,
+      move: {
+        scrollbars: true,
+        drag: false,
+        wheel: false,
+      },
+      grid: {
+        spacing: 24,
+        length: 3,
+        colour: "rgba(100, 116, 139, 0.28)",
+        snap: true,
+      },
+      zoom: {
+        controls: true,
+        wheel: true,
+        startScale: 0.9,
+        maxScale: 1.4,
+        minScale: 0.55,
+        scaleSpeed: 1.1,
+      },
+    }),
+    [],
+  )
 
   function executeProgram() {
     if (!workspace || !challenge.data) return
 
     try {
-      const { xml, program } = buildWorkspaceProgramSnapshot(workspace, challenge.data.canvas)
-      setWorkspaceXml(xml)
+      const { program } = buildWorkspaceProgramSnapshot(workspace, challenge.data.canvas)
       setPreviewProgram(program)
       setAnimationKey((key) => key + 1)
       setActionError(null)
@@ -149,7 +172,6 @@ export default function ChallengePlayPage() {
     }
 
     const originalSetVisible = typedToolbox.setVisible.bind(typedToolbox)
-    const originalClearSelection = typedToolbox.clearSelection?.bind(typedToolbox)
     const originalSetSelectedItem = typedToolbox.setSelectedItem?.bind(typedToolbox)
     const getPinnedToolboxItem = () => {
       const selectedItem = typedToolbox.getSelectedItem?.()
@@ -174,11 +196,8 @@ export default function ChallengePlayPage() {
       typedToolbox.autoHide = () => keepToolboxOpen()
     }
 
-    if (originalClearSelection) {
-      typedToolbox.clearSelection = () => {
-        originalClearSelection()
-        requestAnimationFrame(keepToolboxOpen)
-      }
+    if (typedToolbox.clearSelection) {
+      typedToolbox.clearSelection = () => keepToolboxOpen()
     }
 
     if (originalSetSelectedItem) {
@@ -247,45 +266,15 @@ export default function ChallengePlayPage() {
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_24rem]">
-        <Card className="min-h-[680px] bg-background/80">
-          <CardHeader className="border-b">
-            <div className="grid grid-cols-[11rem_minmax(0,1fr)] gap-3">
-              <div>
-                <CardTitle>積木</CardTitle>
-                <CardDescription>拖曳積木到右側組合程式。</CardDescription>
-              </div>
-              <div>
-                <CardTitle>工作區</CardTitle>
-                <CardDescription>積木可以接合、重新排序，執行或提交時會序列化。</CardDescription>
-              </div>
-            </div>
-          </CardHeader>
+        <Card className="h-[680px] bg-background/80 p-0">
           <CardContent className="min-h-0 flex-1 p-0">
             <BlocklyWorkspace
-              className="h-[620px] w-full"
-              initialXml={workspaceXml}
+              className="h-full w-full"
+              initialXml={EMPTY_WORKSPACE_XML}
               toolboxConfiguration={reactBlocklyToolboxCategories}
-              workspaceConfiguration={{
-                trashcan: true,
-                scrollbars: true,
-                grid: {
-                  spacing: 24,
-                  length: 3,
-                  colour: "rgba(100, 116, 139, 0.28)",
-                  snap: true,
-                },
-                zoom: {
-                  controls: true,
-                  wheel: true,
-                  startScale: 0.9,
-                  maxScale: 1.4,
-                  minScale: 0.55,
-                  scaleSpeed: 1.1,
-                },
-              }}
+              workspaceConfiguration={blocklyWorkspaceConfiguration}
               onInject={handleWorkspaceInject}
               onDispose={() => setWorkspace(null)}
-              onXmlChange={setWorkspaceXml}
               onImportXmlError={(error) => setActionError(studentErrorMessage(error))}
             />
           </CardContent>
@@ -298,14 +287,20 @@ export default function ChallengePlayPage() {
               <CardDescription>執行只會播放目前工作區，不會提交答案。</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
-              <div className="aspect-square overflow-hidden rounded-lg border bg-muted/20">
-                <ChallengeRenderer
+              <div className="aspect-square">
+                <TurtlePreviewPanel
                   challenge={challenge.data}
                   program={previewProgram ?? undefined}
+                  title="預覽"
+                  sourceLabel={previewProgram ? "block program" : "no program"}
                   animated={Boolean(previewProgram)}
                   animationKey={animationKey}
                   compact
-                  className="h-full"
+                  showTarget
+                  showTurtle
+                  className="h-full w-full rounded-lg"
+                  viewportClassName="h-full"
+                  rendererClassName="h-full"
                   canvasClassName="h-full w-full"
                 />
               </div>

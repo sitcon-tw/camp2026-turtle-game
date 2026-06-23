@@ -1,4 +1,6 @@
 export { ChallengeRenderer } from "./ChallengeRenderer"
 export type { ChallengeRendererProps } from "./ChallengeRenderer"
+export { TurtlePreviewPanel } from "./TurtlePreviewPanel"
+export type { TurtlePreviewPanelProps } from "./TurtlePreviewPanel"
 export { TurtleCanvas } from "./TurtleCanvas"
 export type { TurtleCanvasProps } from "./TurtleCanvas"
