@@ -14,6 +14,7 @@ import type {
 export type DrawTraceOptions = {
   canvas?: TurtleCanvasSpec
   stepIndex?: number
+  stepProgress?: number
   scaleToFit?: boolean
   backgroundColor?: string
   targetImage?: CanvasImageSource | null
@@ -32,7 +33,7 @@ export const DEFAULT_CANVAS: TurtleCanvasSpec = {
 
 const DEFAULT_STROKE_COLOR = "#000000"
 const DEFAULT_STROKE_WIDTH = 1
-const DEFAULT_STEP_DURATION_MS = 180
+const DEFAULT_STEP_DURATION_MS = 500
 
 export function createDefaultProgram(canvas: Partial<TurtleCanvasSpec> = {}): TurtleProgram {
   const normalizedCanvas = normalizeCanvas(canvas)
@@ -187,7 +188,8 @@ export function drawTraceToCanvas(ctx: CanvasRenderingContext2D, trace: TraceSte
   const offsetX = scaleToFit ? (outputWidth - canvas.width * scale) / 2 : 0
   const offsetY = scaleToFit ? (outputHeight - canvas.height * scale) / 2 : 0
   const visibleTrace = getVisibleTrace(trace, options.stepIndex)
-  const finalState = options.turtleState ?? visibleTrace.at(-1)?.after ?? trace[0]?.before
+  const stepProgress = clampProgress(options.stepProgress ?? 1)
+  const finalState = options.turtleState ?? visibleTurtleState(trace, visibleTrace, options.stepIndex, stepProgress)
 
   ctx.save()
   ctx.setTransform(1, 0, 0, 1, 0, 0)
@@ -204,10 +206,12 @@ export function drawTraceToCanvas(ctx: CanvasRenderingContext2D, trace: TraceSte
       continue
     }
 
-    if (step.draw_line) drawLine(ctx, step.draw_line)
+    if (step.draw_line) {
+      drawLine(ctx, partialDrawLine(step.draw_line, step.step_index === options.stepIndex ? stepProgress : 1))
+    }
   }
 
-  if (options.showTurtle && finalState) drawTurtle(ctx, finalState)
+  if (options.showTurtle && finalState) drawTurtle(ctx, finalState, canvas)
 
   ctx.restore()
 }
@@ -253,8 +257,9 @@ export function visibleLinesForStep(trace: TraceStep[], stepIndex?: number): Dra
   return lines
 }
 
-export function playbackDelayForStep(step: TraceStep | undefined, fallbackMs = DEFAULT_STEP_DURATION_MS) {
-  return Math.max(0, step?.duration_ms && step.duration_ms > 0 ? step.duration_ms : fallbackMs)
+export function playbackDelayForStep(step?: TraceStep | undefined) {
+  void step
+  return DEFAULT_STEP_DURATION_MS
 }
 
 export function normalizeHeading(degrees: number): number {
@@ -449,6 +454,27 @@ function getVisibleTrace(trace: TraceStep[], stepIndex?: number): TraceStep[] {
   return trace.filter((step) => step.step_index <= stepIndex)
 }
 
+function visibleTurtleState(
+  trace: TraceStep[],
+  visibleTrace: TraceStep[],
+  stepIndex: number | undefined,
+  stepProgress: number,
+): TurtleState | undefined {
+  if (stepIndex === undefined) return visibleTrace.at(-1)?.after ?? trace[0]?.before
+
+  const currentStep = trace.find((step) => step.step_index === stepIndex)
+  if (currentStep?.draw_line && stepProgress < 1) {
+    const line = partialDrawLine(currentStep.draw_line, stepProgress)
+    return {
+      ...currentStep.after,
+      x: line.to_x,
+      y: line.to_y,
+    }
+  }
+
+  return visibleTrace.at(-1)?.after ?? trace[0]?.before
+}
+
 function paintBackground(ctx: CanvasRenderingContext2D, canvas: TurtleCanvasSpec, options: DrawTraceOptions): void {
   ctx.fillStyle = options.backgroundColor ?? canvas.background_color ?? DEFAULT_CANVAS.background_color ?? "#ffffff"
   ctx.fillRect(0, 0, canvas.width, canvas.height)
@@ -472,22 +498,46 @@ function drawLine(ctx: CanvasRenderingContext2D, line: DrawLine): void {
   ctx.stroke()
 }
 
-function drawTurtle(ctx: CanvasRenderingContext2D, state: TurtleState): void {
-  const radians = (-normalizeHeading(state.heading) * Math.PI) / 180
+function partialDrawLine(line: DrawLine, progress: number): DrawLine {
+  const clampedProgress = clampProgress(progress)
+  return {
+    ...line,
+    to_x: line.from_x + (line.to_x - line.from_x) * clampedProgress,
+    to_y: line.from_y + (line.to_y - line.from_y) * clampedProgress,
+  }
+}
+
+function clampProgress(value: number): number {
+  if (!Number.isFinite(value)) return 1
+  return Math.max(0, Math.min(1, value))
+}
+
+function drawTurtle(ctx: CanvasRenderingContext2D, state: TurtleState, canvas: TurtleCanvasSpec): void {
+  const cursorSize = Math.min(Math.max(Math.min(canvas.width, canvas.height) * 0.028, 7), 16)
+  const halfWidth = cursorSize * 0.42
+  const tailLength = cursorSize * 0.45
 
   ctx.save()
   ctx.translate(state.x, state.y)
-  ctx.rotate(radians)
+  ctx.rotate((-state.heading * Math.PI) / 180)
+  ctx.lineJoin = "round"
+  ctx.lineCap = "round"
+  ctx.fillStyle = "#22c55e"
+  ctx.strokeStyle = "#14532d"
+  ctx.lineWidth = Math.max(cursorSize * 0.12, 1.5)
+
   ctx.beginPath()
-  ctx.moveTo(9, 0)
-  ctx.lineTo(-6, -5)
-  ctx.lineTo(-4, 0)
-  ctx.lineTo(-6, 5)
+  ctx.moveTo(0, -cursorSize * 0.72)
+  ctx.lineTo(halfWidth, cursorSize * 0.48)
+  ctx.lineTo(0, cursorSize * 0.24)
+  ctx.lineTo(-halfWidth, cursorSize * 0.48)
   ctx.closePath()
-  ctx.fillStyle = "#10b981"
-  ctx.strokeStyle = "#064e3b"
-  ctx.lineWidth = 1.5
   ctx.fill()
+  ctx.stroke()
+
+  ctx.beginPath()
+  ctx.moveTo(0, cursorSize * 0.48)
+  ctx.lineTo(0, cursorSize * 0.48 + tailLength)
   ctx.stroke()
   ctx.restore()
 }

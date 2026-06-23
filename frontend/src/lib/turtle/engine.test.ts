@@ -4,8 +4,10 @@ import {
   interpretProgram,
   normalizeExecutionTrace,
   normalizeTurtleProgram,
+  playbackDelayForStep,
   visibleLinesForStep,
 } from "./engine"
+import type { TraceStep } from "./types"
 
 describe("frontend turtle renderer engine", () => {
   it("interprets backend canonical programs with args and repeat children", () => {
@@ -134,5 +136,21 @@ describe("frontend turtle renderer engine", () => {
     expect(visibleLinesForStep(trace!.steps, 2)).toEqual([
       { from_x: 4, from_y: 1, to_x: 9, to_y: 1, color: "#000000", stroke_width: 1 },
     ])
+  })
+
+  it("uses a fixed 500ms playback delay for every trace step", () => {
+    const step = (duration_ms: number): TraceStep => ({
+      step_index: 0,
+      block_id: "wait",
+      block_type: "wait",
+      before: { x: 0, y: 0, heading: 0, pen_down: true, stroke_color: "#000000", stroke_width: 1 },
+      after: { x: 0, y: 0, heading: 0, pen_down: true, stroke_color: "#000000", stroke_width: 1 },
+      draw_line: null,
+      duration_ms,
+    })
+
+    expect(playbackDelayForStep(undefined)).toBe(500)
+    expect(playbackDelayForStep(step(25))).toBe(500)
+    expect(playbackDelayForStep(step(0))).toBe(500)
   })
 })

@@ -19,7 +19,6 @@ export type TurtleCanvasProps = {
   currentStepIndex?: number
   animated?: boolean
   animationKey?: string | number
-  playbackMsPerStep?: number
   loop?: boolean
   scaleToFit?: boolean
   showTurtle?: boolean
@@ -40,7 +39,6 @@ export function TurtleCanvas({
   currentStepIndex,
   animated = false,
   animationKey,
-  playbackMsPerStep = 180,
   loop = false,
   scaleToFit = true,
   showTurtle = true,
@@ -60,7 +58,10 @@ export function TurtleCanvas({
   const [playbackState, setPlaybackState] = useState<{
     id: string
     stepIndex: number
+    stepStartedAt: number
+    now: number
   } | null>(null)
+  const [controlledStepProgress, setControlledStepProgress] = useState(1)
   const normalizedProgram = useMemo(() => normalizeTurtleProgram(program), [program])
   const normalizedTrace = useMemo(() => {
     const existingTrace = normalizeExecutionTrace(trace, normalizedProgram)
@@ -81,6 +82,11 @@ export function TurtleCanvas({
   const playbackId = `${animationKey ?? "default"}:${normalizedTrace?.steps.length ?? 0}`
   const autoStepIndex = animated && playbackState?.id === playbackId ? playbackState.stepIndex : -1
   const renderedStepIndex = currentStepIndex ?? (animated ? autoStepIndex : undefined)
+  const autoStepProgress =
+    animated && playbackState?.id === playbackId
+      ? playbackProgress(playbackState.now, playbackState.stepStartedAt)
+      : 1
+  const renderedStepProgress = currentStepIndex !== undefined ? (animated ? controlledStepProgress : 1) : autoStepProgress
   const targetImage = targetImageState && targetImageState.src === targetImageSrc ? targetImageState.image : null
 
   useEffect(() => {
@@ -105,22 +111,80 @@ export function TurtleCanvas({
   useEffect(() => {
     if (!animated || !normalizedTrace || currentStepIndex !== undefined) return
 
-    const nextIndex = (autoStepIndex ?? -1) + 1
-    if (nextIndex >= normalizedTrace.steps.length) {
-      if (loop && normalizedTrace.steps.length > 0) {
-        const timer = window.setTimeout(() => setPlaybackState({ id: playbackId, stepIndex: -1 }), playbackMsPerStep)
-        return () => window.clearTimeout(timer)
-      }
+    if (normalizedTrace.steps.length === 0) {
       onPlaybackEnd?.()
       return
     }
 
-    const timer = window.setTimeout(
-      () => setPlaybackState({ id: playbackId, stepIndex: nextIndex }),
-      playbackDelayForStep(normalizedTrace.steps[nextIndex], playbackMsPerStep),
-    )
-    return () => window.clearTimeout(timer)
-  }, [animated, autoStepIndex, currentStepIndex, loop, normalizedTrace, onPlaybackEnd, playbackId, playbackMsPerStep])
+    let cancelled = false
+    let animationFrame = 0
+    let stepIndex = 0
+    let stepStartedAt = performance.now()
+    let hasEnded = false
+
+    const publishFrame = (now: number) => {
+      setPlaybackState({ id: playbackId, stepIndex, stepStartedAt, now })
+    }
+
+    const tick = (now: number) => {
+      if (cancelled || hasEnded) return
+
+      while (now - stepStartedAt >= playbackDelayForStep(normalizedTrace.steps[stepIndex])) {
+        stepIndex += 1
+        stepStartedAt = now
+
+        if (stepIndex >= normalizedTrace.steps.length) {
+          if (loop) {
+            stepIndex = 0
+            break
+          }
+
+          hasEnded = true
+          setPlaybackState({
+            id: playbackId,
+            stepIndex: normalizedTrace.steps.length - 1,
+            stepStartedAt: now - playbackDelayForStep(normalizedTrace.steps.at(-1)),
+            now,
+          })
+          onPlaybackEnd?.()
+          return
+        }
+      }
+
+      publishFrame(now)
+      animationFrame = window.requestAnimationFrame(tick)
+    }
+
+    publishFrame(stepStartedAt)
+    animationFrame = window.requestAnimationFrame(tick)
+
+    return () => {
+      cancelled = true
+      window.cancelAnimationFrame(animationFrame)
+    }
+  }, [animated, currentStepIndex, loop, normalizedTrace, onPlaybackEnd, playbackId])
+
+  useEffect(() => {
+    if (!animated || currentStepIndex === undefined) return
+
+    let cancelled = false
+    let animationFrame = 0
+    const startedAt = performance.now()
+
+    const tick = (now: number) => {
+      if (cancelled) return
+      const progress = playbackProgress(now, startedAt)
+      setControlledStepProgress(progress)
+      if (progress < 1) animationFrame = window.requestAnimationFrame(tick)
+    }
+
+    animationFrame = window.requestAnimationFrame(tick)
+
+    return () => {
+      cancelled = true
+      window.cancelAnimationFrame(animationFrame)
+    }
+  }, [animated, currentStepIndex])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -130,6 +194,7 @@ export function TurtleCanvas({
     drawTraceToCanvas(ctx, normalizedTrace?.steps ?? [], {
       canvas: canvasSpec,
       stepIndex: renderedStepIndex,
+      stepProgress: renderedStepProgress,
       scaleToFit,
       backgroundColor: backgroundColor ?? canvasSpec.background_color,
       targetImage,
@@ -142,6 +207,7 @@ export function TurtleCanvas({
     canvasSpec,
     normalizedTrace,
     renderedStepIndex,
+    renderedStepProgress,
     scaleToFit,
     showTurtle,
     targetImage,
@@ -164,4 +230,8 @@ export function TurtleCanvas({
       }}
     />
   )
+}
+
+function playbackProgress(now: number, stepStartedAt: number) {
+  return Math.max(0, Math.min(1, (now - stepStartedAt) / playbackDelayForStep()))
 }
