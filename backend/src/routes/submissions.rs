@@ -46,6 +46,7 @@ pub fn router() -> Router<AppState> {
         .route("/submissions/{submission_id}", get(get_my_submission))
         .route("/queue/me", get(my_queue))
         .route("/leaderboard", get(leaderboard))
+        .route("/leaderboard/events", get(leaderboard_events))
         .route("/events/team", get(team_events))
         .route("/assets/challenges/{asset_id}", get(challenge_asset))
         .route("/assets/results/{submission_id_png}", get(result_asset))
@@ -251,15 +252,50 @@ fn leaderboard_entries_with_score_events(
 }
 
 async fn leaderboard(State(state): State<AppState>) -> Result<Json<LeaderboardResponse>, AppError> {
+    Ok(Json(leaderboard_response(&state)?))
+}
+
+async fn leaderboard_events(
+    State(state): State<AppState>,
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, AppError> {
+    let initial_event = leaderboard_sse_event(&state)?;
+    let stream_state = state.clone();
+    let updates = BroadcastStream::new(state.event_bus.subscribe()).filter_map(move |message| {
+        let event = match message {
+            Ok(event) => event,
+            Err(_) => return None,
+        };
+        if !matches!(
+            event,
+            AppEvent::ScoreRecorded { .. } | AppEvent::LeaderboardUpdated
+        ) {
+            return None;
+        }
+        leaderboard_sse_event(&stream_state).ok().map(Ok)
+    });
+    let stream = tokio_stream::once(Ok(initial_event)).chain(updates);
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+fn leaderboard_response(state: &AppState) -> Result<LeaderboardResponse, AppError> {
     let teams = state.repository.leaderboard()?;
     let score_events = state
         .repository
         .list_score_events(ScoreEventListFilter::default())?;
     let updated_at = leaderboard_updated_at(&teams, &score_events);
-    Ok(Json(LeaderboardResponse {
+    Ok(LeaderboardResponse {
         teams: leaderboard_entries_with_score_events(teams, &score_events),
         updated_at,
-    }))
+    })
+}
+
+fn leaderboard_sse_event(state: &AppState) -> Result<Event, AppError> {
+    let response = leaderboard_response(state)?;
+    let data = serde_json::to_string(&response).map_err(|error| {
+        AppError::internal(format!("failed to serialize leaderboard event: {error}"))
+    })?;
+    Ok(Event::default().event("message").data(data))
 }
 
 fn leaderboard_score_stats(score_events: &[ScoreEvent]) -> HashMap<TeamId, LeaderboardScoreStats> {
@@ -505,6 +541,7 @@ fn validated_program_value(value: Value) -> Result<Value, AppError> {
 
 fn event_visible_to_team(state: &AppState, team_id: TeamId, event: &AppEvent) -> bool {
     match event {
+        AppEvent::LeaderboardUpdated => false,
         AppEvent::ScoreRecorded { score_event } => score_event.team_id == team_id,
         AppEvent::SubmissionUpdated { submission_id } => state
             .repository

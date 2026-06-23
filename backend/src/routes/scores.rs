@@ -199,6 +199,7 @@ async fn recalculate_scores(
 ) -> Result<Json<RecalculateResponse>, AppError> {
     require_admin(&user)?;
     let teams = state.repository.recalculate_scores_from_events()?;
+    state.event_bus.publish(AppEvent::LeaderboardUpdated);
     Ok(Json(RecalculateResponse { teams }))
 }
 
@@ -208,6 +209,7 @@ async fn recalculate_challenge_awards(
 ) -> Result<Json<RecalculateResponse>, AppError> {
     require_admin(&user)?;
     let teams = state.repository.recalculate_challenge_pass_awards()?;
+    state.event_bus.publish(AppEvent::LeaderboardUpdated);
     Ok(Json(RecalculateResponse { teams }))
 }
 
