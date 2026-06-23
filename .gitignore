@@ -1,0 +1,19 @@
+# Shared workspace ignores
+
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.temp
+
+# Environment files
+.env
+.env.*
+
+# Editor/IDE metadata
+.vscode/
+.idea/
+*.swo
+*.swp
+*~
+

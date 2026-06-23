@@ -1,2 +1,12 @@
-/target
-/storage
+/.env
+/.env.local
+/.env.*
+
+# Rust artifacts
+target/
+
+# Application data generated at runtime
+storage/
+
+# Additional env files with names commonly used in deployment
+*.env
