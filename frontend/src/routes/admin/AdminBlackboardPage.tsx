@@ -1,5 +1,7 @@
+import { Fragment } from "react"
 import { useQuery } from "@tanstack/react-query"
 
+import { AdminSubmissionPreview } from "@/components/admin/AdminSubmissionPreview"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -192,15 +194,22 @@ export default function AdminBlackboardPage() {
                       </TableHeader>
                       <TableBody>
                         {blackboard.data.running.map((submission) => (
-                          <TableRow key={submission.id}>
-                            <TableCell className="font-mono text-xs">{submission.id.slice(0, 8)}</TableCell>
-                            <TableCell>{nameForTeam(teams.data, submission.team_id)}</TableCell>
-                            <TableCell>{titleForChallenge(challenges.data, submission.challenge_id)}</TableCell>
-                            <TableCell>
-                              <Badge variant={statusBadge(submission.status)}>{submission.status}</Badge>
-                            </TableCell>
-                            <TableCell>{formatDate(submission.started_at)}</TableCell>
-                          </TableRow>
+                          <Fragment key={submission.id}>
+                            <TableRow>
+                              <TableCell className="font-mono text-xs">{submission.id.slice(0, 8)}</TableCell>
+                              <TableCell>{nameForTeam(teams.data, submission.team_id)}</TableCell>
+                              <TableCell>{titleForChallenge(challenges.data, submission.challenge_id)}</TableCell>
+                              <TableCell>
+                                <Badge variant={statusBadge(submission.status)}>{submission.status}</Badge>
+                              </TableCell>
+                              <TableCell>{formatDate(submission.started_at)}</TableCell>
+                            </TableRow>
+                            <TableRow>
+                              <TableCell colSpan={5}>
+                                <AdminSubmissionPreview submission={submission} compact className="w-full" />
+                              </TableCell>
+                            </TableRow>
+                          </Fragment>
                         ))}
                       </TableBody>
                     </Table>

@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { AdminSubmissionPreview } from "@/components/admin/AdminSubmissionPreview"
 import { adminApi, errorMessage } from "@/lib/admin/api"
 import type { Challenge, SubmissionStatus, Team } from "@/lib/admin/types"
 
@@ -234,6 +235,7 @@ export default function AdminSubmissionsPage() {
                   <TableHead>Similarity</TableHead>
                   <TableHead>Points</TableHead>
                   <TableHead>Created</TableHead>
+                  <TableHead>Preview</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -249,6 +251,9 @@ export default function AdminSubmissionsPage() {
                     <TableCell>{formatPercent(submission.similarity)}</TableCell>
                     <TableCell>{submission.awarded_points ?? "-"}</TableCell>
                     <TableCell>{formatDate(submission.created_at)}</TableCell>
+                    <TableCell>
+                      <AdminSubmissionPreview submission={submission} compact />
+                    </TableCell>
                     <TableCell>
                       <div className="flex gap-2">
                         <Button

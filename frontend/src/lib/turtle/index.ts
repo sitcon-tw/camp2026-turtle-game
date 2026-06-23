@@ -1,0 +1,45 @@
+export type {
+  BackwardBlock,
+  BlockProgram,
+  ClearBlock,
+  DrawLine,
+  ForwardBlock,
+  GotoBlock,
+  PenDownBlock,
+  PenUpBlock,
+  RepeatBlock,
+  SetColorBlock,
+  SetHeadingBlock,
+  SetStrokeWidthBlock,
+  TraceStep,
+  TurnLeftBlock,
+  TurnRightBlock,
+  TurtleBlock,
+  TurtleBlockBase,
+  TurtleBlockType,
+  TurtleCanvasSpec,
+  TurtlePreset,
+  TurtleProgram,
+  TurtleProgramVersion,
+  TurtleState,
+  WaitBlock,
+} from "./types";
+
+export {
+  cloneTurtleProgram,
+  createDefaultProgram,
+  drawTraceToCanvas,
+  interpretProgram,
+  isTurtleProgram,
+  normalizeHeading,
+  parseTurtleProgramJson,
+  serializeTurtleProgram,
+} from "./engine";
+
+export {
+  defaultCanvas,
+  flowerProgram,
+  squareProgram,
+  staircaseProgram,
+  turtlePresets,
+} from "./presets";
