@@ -15,8 +15,8 @@ import AdminChallengesPage from "@/routes/admin/AdminChallengesPage"
 import AdminSubmissionsPage from "@/routes/admin/AdminSubmissionsPage"
 import AdminJudgeQueuePage from "@/routes/admin/AdminJudgeQueuePage"
 import AdminScoresPage from "@/routes/admin/AdminScoresPage"
-import AdminBlackboardPage from "@/routes/admin/AdminBlackboardPage"
 import AdminSystemPage from "@/routes/admin/AdminSystemPage"
+import BlackboardPage from "@/routes/BlackboardPage"
 import { studentApi } from "@/lib/student/api"
 import { getTeamToken } from "@/lib/student/session"
 import StudentLayout from "@/routes/student/StudentLayout"
@@ -72,6 +72,7 @@ function App() {
           <BrowserRouter>
             <Routes>
               <Route path="/" element={<HomePage />} />
+              <Route path="/blackboard" element={<BlackboardPage />} />
               <Route element={<RequireStudent />}>
                 <Route element={<StudentLayout />}>
                   <Route path="/challenges" element={<ChallengeListPage />} />
@@ -88,7 +89,6 @@ function App() {
                   <Route path="submissions" element={<AdminSubmissionsPage />} />
                   <Route path="judge-queue" element={<AdminJudgeQueuePage />} />
                   <Route path="scores" element={<AdminScoresPage />} />
-                  <Route path="blackboard" element={<AdminBlackboardPage />} />
                   <Route path="system" element={<AdminSystemPage />} />
                 </Route>
               </Route>
