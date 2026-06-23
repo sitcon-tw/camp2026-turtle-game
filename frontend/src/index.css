@@ -131,3 +131,12 @@
     @apply font-sans;
   }
 }
+
+.blocklyKeyboardNavigation .blocklyToolbox:has(.blocklyActiveFocus),
+.blocklyKeyboardNavigation .blocklyActiveFocus:is(.blocklyFlyout, .blocklyToolbox),
+.blocklyToolboxCategoryContainer:focus,
+.blocklyToolboxCategoryContainer:focus-visible,
+.blocklyToolboxCategory:focus,
+.blocklyToolboxCategory:focus-visible {
+  outline: none;
+}
