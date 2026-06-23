@@ -1,4 +1,4 @@
-export type TurtleProgramVersion = 1;
+export type TurtleProgramVersion = 1
 
 export type TurtleBlockType =
   | "forward"
@@ -13,88 +13,105 @@ export type TurtleBlockType =
   | "set_heading"
   | "repeat"
   | "clear"
-  | "wait";
+  | "wait"
 
-export interface TurtleCanvasSpec {
-  width: number;
-  height: number;
+export type TurtleCanvasSpec = {
+  width: number
+  height: number
+  background_color?: string
 }
 
-export interface TurtleState {
-  x: number;
-  y: number;
-  heading: number;
-  pen_down: boolean;
-  stroke_color: string;
-  stroke_width: number;
+export type TurtleState = {
+  x: number
+  y: number
+  heading: number
+  pen_down: boolean
+  stroke_color: string
+  stroke_width: number
 }
 
-export interface TurtleBlockBase {
-  id?: string;
+export type CanonicalBlockArgs = {
+  distance?: number
+  degrees?: number
+  heading?: number
+  color?: string
+  width?: number
+  stroke_width?: number
+  x?: number
+  y?: number
+  times?: number
+  duration?: number
+  duration_ms?: number
 }
 
-export interface ForwardBlock extends TurtleBlockBase {
-  type: "forward";
-  distance: number;
+export type TurtleBlockBase = {
+  id: string
 }
 
-export interface BackwardBlock extends TurtleBlockBase {
-  type: "backward";
-  distance: number;
+export type ForwardBlock = TurtleBlockBase & {
+  type: "forward"
+  args: { distance: number }
 }
 
-export interface TurnLeftBlock extends TurtleBlockBase {
-  type: "turn_left";
-  degrees: number;
+export type BackwardBlock = TurtleBlockBase & {
+  type: "backward"
+  args: { distance: number }
 }
 
-export interface TurnRightBlock extends TurtleBlockBase {
-  type: "turn_right";
-  degrees: number;
+export type TurnLeftBlock = TurtleBlockBase & {
+  type: "turn_left"
+  args: { degrees: number }
 }
 
-export interface PenUpBlock extends TurtleBlockBase {
-  type: "pen_up";
+export type TurnRightBlock = TurtleBlockBase & {
+  type: "turn_right"
+  args: { degrees: number }
 }
 
-export interface PenDownBlock extends TurtleBlockBase {
-  type: "pen_down";
+export type PenUpBlock = TurtleBlockBase & {
+  type: "pen_up"
+  args?: Record<string, never>
 }
 
-export interface SetColorBlock extends TurtleBlockBase {
-  type: "set_color";
-  color: string;
+export type PenDownBlock = TurtleBlockBase & {
+  type: "pen_down"
+  args?: Record<string, never>
 }
 
-export interface SetStrokeWidthBlock extends TurtleBlockBase {
-  type: "set_stroke_width";
-  width: number;
+export type SetColorBlock = TurtleBlockBase & {
+  type: "set_color"
+  args: { color: string }
 }
 
-export interface GotoBlock extends TurtleBlockBase {
-  type: "goto";
-  x: number;
-  y: number;
+export type SetStrokeWidthBlock = TurtleBlockBase & {
+  type: "set_stroke_width"
+  args: { width: number }
 }
 
-export interface SetHeadingBlock extends TurtleBlockBase {
-  type: "set_heading";
-  degrees: number;
+export type GotoBlock = TurtleBlockBase & {
+  type: "goto"
+  args: { x: number; y: number }
 }
 
-export interface RepeatBlock extends TurtleBlockBase {
-  type: "repeat";
-  times: number;
-  children: TurtleBlock[];
+export type SetHeadingBlock = TurtleBlockBase & {
+  type: "set_heading"
+  args: { degrees: number }
 }
 
-export interface ClearBlock extends TurtleBlockBase {
-  type: "clear";
+export type RepeatBlock = TurtleBlockBase & {
+  type: "repeat"
+  args: { times: number }
+  children: TurtleBlock[]
 }
 
-export interface WaitBlock extends TurtleBlockBase {
-  type: "wait";
-  duration_ms: number;
+export type ClearBlock = TurtleBlockBase & {
+  type: "clear"
+  args?: Record<string, never>
+}
+
+export type WaitBlock = TurtleBlockBase & {
+  type: "wait"
+  args: { duration_ms: number }
 }
 
 export type TurtleBlock =
@@ -110,39 +127,54 @@ export type TurtleBlock =
   | SetHeadingBlock
   | RepeatBlock
   | ClearBlock
-  | WaitBlock;
+  | WaitBlock
 
-export interface TurtleProgram {
-  version: TurtleProgramVersion;
-  canvas: TurtleCanvasSpec;
-  start: TurtleState;
-  blocks: TurtleBlock[];
+export type TurtleProgram = {
+  version: TurtleProgramVersion
+  canvas: TurtleCanvasSpec
+  start: TurtleState
+  blocks: TurtleBlock[]
 }
 
-export type BlockProgram = TurtleProgram;
+export type BlockProgram = TurtleProgram
 
-export interface DrawLine {
-  from_x: number;
-  from_y: number;
-  to_x: number;
-  to_y: number;
-  color: string;
-  stroke_width: number;
+export type DrawLine = {
+  from_x: number
+  from_y: number
+  to_x: number
+  to_y: number
+  color: string
+  stroke_width: number
 }
 
-export interface TraceStep {
-  step_index: number;
-  block_id: string;
-  block_type: TurtleBlockType;
-  before: TurtleState;
-  after: TurtleState;
-  draw_line: DrawLine | null;
-  duration_ms: number;
+export type TraceStep = {
+  step_index: number
+  block_id: string
+  block_type: TurtleBlockType
+  before: TurtleState
+  after: TurtleState
+  draw_line: DrawLine | null
+  duration_ms: number
 }
 
-export interface TurtlePreset {
-  id: string;
-  name: string;
-  description: string;
-  program: TurtleProgram;
+export type ExecutionTrace = {
+  final_state: TurtleState
+  steps: TraceStep[]
+}
+
+export type TurtlePreset = {
+  id: string
+  name: string
+  description: string
+  program: TurtleProgram
+}
+
+export type TurtleChallengeLike = {
+  target_image_asset_id?: string | null
+  target_image_url?: string | null
+  canvas?: {
+    width?: number | null
+    height?: number | null
+    background_color?: string | null
+  } | null
 }

@@ -3,6 +3,7 @@ export type {
   BlockProgram,
   ClearBlock,
   DrawLine,
+  ExecutionTrace,
   ForwardBlock,
   GotoBlock,
   PenDownBlock,
@@ -18,23 +19,33 @@ export type {
   TurtleBlockBase,
   TurtleBlockType,
   TurtleCanvasSpec,
+  TurtleChallengeLike,
   TurtlePreset,
   TurtleProgram,
   TurtleProgramVersion,
   TurtleState,
   WaitBlock,
-} from "./types";
+} from "./types"
 
 export {
+  DEFAULT_CANVAS,
+  challengeTargetImageSrc,
   cloneTurtleProgram,
   createDefaultProgram,
   drawTraceToCanvas,
+  inferCanvas,
   interpretProgram,
   isTurtleProgram,
+  normalizeExecutionTrace,
   normalizeHeading,
+  normalizeTurtleProgram,
   parseTurtleProgramJson,
+  playbackDelayForStep,
+  previewStats,
   serializeTurtleProgram,
-} from "./engine";
+  traceFromProgram,
+  visibleLinesForStep,
+} from "./engine"
 
 export {
   defaultCanvas,
@@ -42,4 +53,4 @@ export {
   squareProgram,
   staircaseProgram,
   turtlePresets,
-} from "./presets";
+} from "./presets"

@@ -1,9 +1,10 @@
-import type { TurtlePreset, TurtleProgram } from "./types";
+import type { TurtlePreset, TurtleProgram } from "./types"
 
 export const defaultCanvas = {
   width: 640,
   height: 480,
-} as const;
+  background_color: "#ffffff",
+} as const
 
 export const squareProgram: TurtleProgram = {
   version: 1,
@@ -20,14 +21,14 @@ export const squareProgram: TurtleProgram = {
     {
       id: "square-repeat",
       type: "repeat",
-      times: 4,
+      args: { times: 4 },
       children: [
-        { id: "square-forward", type: "forward", distance: 180 },
-        { id: "square-left", type: "turn_left", degrees: 90 },
+        { id: "square-forward", type: "forward", args: { distance: 180 } },
+        { id: "square-left", type: "turn_left", args: { degrees: 90 } },
       ],
     },
   ],
-};
+}
 
 export const flowerProgram: TurtleProgram = {
   version: 1,
@@ -44,20 +45,20 @@ export const flowerProgram: TurtleProgram = {
     {
       id: "flower-repeat",
       type: "repeat",
-      times: 18,
+      args: { times: 18 },
       children: [
-        { id: "flower-forward-a", type: "forward", distance: 90 },
-        { id: "flower-left-a", type: "turn_left", degrees: 60 },
-        { id: "flower-forward-b", type: "forward", distance: 90 },
-        { id: "flower-left-b", type: "turn_left", degrees: 120 },
-        { id: "flower-forward-c", type: "forward", distance: 90 },
-        { id: "flower-left-c", type: "turn_left", degrees: 60 },
-        { id: "flower-forward-d", type: "forward", distance: 90 },
-        { id: "flower-right", type: "turn_right", degrees: 100 },
+        { id: "flower-forward-a", type: "forward", args: { distance: 90 } },
+        { id: "flower-left-a", type: "turn_left", args: { degrees: 60 } },
+        { id: "flower-forward-b", type: "forward", args: { distance: 90 } },
+        { id: "flower-left-b", type: "turn_left", args: { degrees: 120 } },
+        { id: "flower-forward-c", type: "forward", args: { distance: 90 } },
+        { id: "flower-left-c", type: "turn_left", args: { degrees: 60 } },
+        { id: "flower-forward-d", type: "forward", args: { distance: 90 } },
+        { id: "flower-right", type: "turn_right", args: { degrees: 100 } },
       ],
     },
   ],
-};
+}
 
 export const staircaseProgram: TurtleProgram = {
   version: 1,
@@ -74,17 +75,17 @@ export const staircaseProgram: TurtleProgram = {
     {
       id: "stair-repeat",
       type: "repeat",
-      times: 6,
+      args: { times: 6 },
       children: [
-        { id: "stair-forward", type: "forward", distance: 55 },
-        { id: "stair-left", type: "turn_left", degrees: 90 },
-        { id: "stair-up", type: "forward", distance: 35 },
-        { id: "stair-right", type: "turn_right", degrees: 90 },
-        { id: "stair-wait", type: "wait", duration_ms: 120 },
+        { id: "stair-forward", type: "forward", args: { distance: 55 } },
+        { id: "stair-left", type: "turn_left", args: { degrees: 90 } },
+        { id: "stair-up", type: "forward", args: { distance: 35 } },
+        { id: "stair-right", type: "turn_right", args: { degrees: 90 } },
+        { id: "stair-wait", type: "wait", args: { duration_ms: 120 } },
       ],
     },
   ],
-};
+}
 
 export const turtlePresets: TurtlePreset[] = [
   {
@@ -105,4 +106,4 @@ export const turtlePresets: TurtlePreset[] = [
     description: "前進與轉向組合出的階梯。",
     program: staircaseProgram,
   },
-];
+]
