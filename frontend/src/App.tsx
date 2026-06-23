@@ -17,6 +17,11 @@ import AdminJudgeQueuePage from "@/routes/admin/AdminJudgeQueuePage"
 import AdminScoresPage from "@/routes/admin/AdminScoresPage"
 import AdminBlackboardPage from "@/routes/admin/AdminBlackboardPage"
 import AdminSystemPage from "@/routes/admin/AdminSystemPage"
+import { studentApi } from "@/lib/student/api"
+import { getTeamToken } from "@/lib/student/session"
+import StudentLayout from "@/routes/student/StudentLayout"
+import ChallengeListPage from "@/routes/student/ChallengeListPage"
+import ChallengePlayPage from "@/routes/student/ChallengePlayPage"
 import "./App.css"
 
 const queryClient = new QueryClient({
@@ -44,6 +49,21 @@ function RequireAdmin() {
   return <Outlet />
 }
 
+function RequireStudent() {
+  const token = getTeamToken()
+  const session = useQuery({
+    queryKey: ["student", "me"],
+    queryFn: studentApi.me,
+    enabled: Boolean(token),
+    retry: false,
+  })
+
+  if (!token) return <Navigate to="/" replace />
+  if (session.isError) return <Navigate to="/" replace />
+
+  return <Outlet />
+}
+
 function App() {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
@@ -52,6 +72,12 @@ function App() {
           <BrowserRouter>
             <Routes>
               <Route path="/" element={<HomePage />} />
+              <Route element={<RequireStudent />}>
+                <Route element={<StudentLayout />}>
+                  <Route path="/challenges" element={<ChallengeListPage />} />
+                  <Route path="/challenges/:challengeId" element={<ChallengePlayPage />} />
+                </Route>
+              </Route>
               <Route path="/admin/login" element={<AdminLoginPage />} />
               <Route element={<RequireAdmin />}>
                 <Route path="/admin" element={<AdminLayout />}>
