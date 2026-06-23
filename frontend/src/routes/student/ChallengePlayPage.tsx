@@ -280,8 +280,11 @@ export default function ChallengePlayPage() {
           </CardContent>
         </Card>
 
-        <aside className="flex flex-col gap-4">
-          <Card className="bg-background/80">
+        <aside
+          className="flex min-h-0 flex-col gap-4 overflow-y-auto overflow-x-hidden pr-2"
+          style={{ height: "680px", maxHeight: "calc(100vh - 14rem)" }}
+        >
+          <Card className="bg-background/80 shrink-0">
             <CardHeader>
               <CardTitle>預覽</CardTitle>
               <CardDescription>執行只會播放目前工作區，不會提交答案。</CardDescription>
@@ -319,7 +322,7 @@ export default function ChallengePlayPage() {
             </CardContent>
           </Card>
 
-          <Card className="bg-background/80">
+          <Card className="bg-background/80 shrink-0">
             <CardHeader>
               <CardTitle>提交紀錄</CardTitle>
               <CardDescription>只顯示目前挑戰的佇列與評測狀態。</CardDescription>
@@ -346,9 +349,9 @@ export default function ChallengePlayPage() {
                 </Empty>
               ) : null}
 
-              {historySubmissions.map((submission) => (
-                <SubmissionHistoryItem key={submission.id} submission={submission} />
-              ))}
+          {historySubmissions.map((submission) => (
+            <SubmissionHistoryItem key={submission.id} submission={submission} />
+          ))}
             </CardContent>
           </Card>
         </aside>

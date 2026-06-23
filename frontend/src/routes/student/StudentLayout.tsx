@@ -45,7 +45,7 @@ export default function StudentLayout() {
             <span>Turtle Challenge</span>
           </Link>
           <nav className="hidden items-center gap-1 sm:flex">
-            <Button variant="ghost" render={<NavLink to="/challenges" />}>
+            <Button variant="ghost" nativeButton={false} render={<NavLink to="/challenges" />}>
               挑戰列表
             </Button>
           </nav>
