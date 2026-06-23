@@ -1,3 +1,15 @@
 #root {
   min-height: 100vh;
 }
+
+.blackboard-live-line {
+  animation-name: blackboard-draw-line;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@keyframes blackboard-draw-line {
+  to {
+    stroke-dashoffset: 0;
+  }
+}

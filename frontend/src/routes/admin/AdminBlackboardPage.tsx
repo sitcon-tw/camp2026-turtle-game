@@ -1,5 +1,5 @@
-import { Fragment } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { Fragment, useEffect, useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 
 import { AdminSubmissionPreview } from "@/components/admin/AdminSubmissionPreview"
 import { Badge } from "@/components/ui/badge"
@@ -9,7 +9,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { adminApi, errorMessage } from "@/lib/admin/api"
-import type { Challenge, SubmissionStatus, Team } from "@/lib/admin/types"
+import type { BlackboardEvent, Challenge, Submission, SubmissionStatus, Team, TraceLine } from "@/lib/admin/types"
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -38,7 +38,30 @@ function titleForChallenge(challenges: Challenge[] | undefined, id: string) {
   return challenges?.find((challenge) => challenge.id === id)?.title ?? id.slice(0, 8)
 }
 
+type AnimatedLine = {
+  fromX: number
+  fromY: number
+  toX: number
+  toY: number
+  color: string
+  strokeWidth: number
+  durationMs: number
+  length: number
+}
+
+type LivePlayback = {
+  submissionId: string
+  canvasWidth: number
+  canvasHeight: number
+  stepCount: number | null
+  currentStep: number | null
+  lines: AnimatedLine[]
+  completed: boolean
+}
+
 export default function AdminBlackboardPage() {
+  const queryClient = useQueryClient()
+  const [playback, setPlayback] = useState<LivePlayback | null>(null)
   const blackboard = useQuery({
     queryKey: ["admin", "blackboard"],
     queryFn: adminApi.blackboard,
@@ -52,6 +75,73 @@ export default function AdminBlackboardPage() {
     queryKey: ["admin", "challenges", "blackboard"],
     queryFn: () => adminApi.challenges({}),
   })
+
+  useEffect(() => {
+    const events = new EventSource("/api/v1/blackboard/events")
+
+    function invalidateBlackboard() {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "blackboard"] })
+    }
+
+    events.addEventListener("message", (message) => {
+      const event = parseBlackboardEvent(message)
+      if (!event) return
+
+      switch (event.type) {
+        case "judging_started":
+          setPlayback({
+            submissionId: event.submission_id,
+            canvasWidth: event.canvas_width,
+            canvasHeight: event.canvas_height,
+            stepCount: event.step_count,
+            currentStep: null,
+            lines: [],
+            completed: false,
+          })
+          invalidateBlackboard()
+          break
+        case "judging_step": {
+          const line = animatedLineFromTraceLine(event.step.draw_line, event.playback_ms)
+          const clearsCanvas = event.step.block_type === "clear"
+          setPlayback((current) => {
+            const base =
+              current?.submissionId === event.submission_id
+                ? current
+                : {
+                    submissionId: event.submission_id,
+                    canvasWidth: event.canvas_width,
+                    canvasHeight: event.canvas_height,
+                    stepCount: null,
+                    currentStep: null,
+                    lines: [],
+                    completed: false,
+                  }
+
+            return {
+              ...base,
+              canvasWidth: event.canvas_width,
+              canvasHeight: event.canvas_height,
+              currentStep: event.step.step_index,
+              lines: clearsCanvas ? [] : line ? [...base.lines, line] : base.lines,
+            }
+          })
+          break
+        }
+        case "judging_completed":
+          setPlayback((current) =>
+            current?.submissionId === event.submission_id ? { ...current, completed: true } : current,
+          )
+          invalidateBlackboard()
+          break
+        case "submission_updated":
+        case "score_recorded":
+          invalidateBlackboard()
+          break
+      }
+    })
+
+    return () => events.close()
+  }, [queryClient])
 
   return (
     <div className="flex flex-col gap-6">
@@ -206,7 +296,10 @@ export default function AdminBlackboardPage() {
                             </TableRow>
                             <TableRow>
                               <TableCell colSpan={5}>
-                                <AdminSubmissionPreview submission={submission} compact className="w-full" />
+                                <LiveSubmissionPreview
+                                  submission={submission}
+                                  playback={playback?.submissionId === submission.id ? playback : null}
+                                />
                               </TableCell>
                             </TableRow>
                           </Fragment>
@@ -222,4 +315,93 @@ export default function AdminBlackboardPage() {
       </Card>
     </div>
   )
+}
+
+function LiveSubmissionPreview({
+  submission,
+  playback,
+}: {
+  submission: Submission
+  playback: LivePlayback | null
+}) {
+  if (!playback) {
+    return <AdminSubmissionPreview submission={submission} compact className="w-full" />
+  }
+
+  return (
+    <div className="overflow-hidden rounded-md border bg-muted/20 text-xs">
+      <div className="flex items-center justify-between gap-3 border-b bg-background/70 px-2 py-1">
+        <span className="font-medium">Live drawing</span>
+        <span className="truncate text-muted-foreground">
+          {playback.completed ? "finishing" : stepLabel(playback)}
+        </span>
+      </div>
+      <div className="h-44 bg-background">
+        <LiveTraceSvg playback={playback} />
+      </div>
+      <div className="flex justify-between gap-3 border-t bg-background/70 px-2 py-1 text-muted-foreground">
+        <span>{stepLabel(playback)}</span>
+        <span>{playback.lines.length} strokes</span>
+      </div>
+    </div>
+  )
+}
+
+function LiveTraceSvg({ playback }: { playback: LivePlayback }) {
+  return (
+    <svg
+      className="h-full w-full"
+      viewBox={`0 0 ${playback.canvasWidth} ${playback.canvasHeight}`}
+      role="img"
+      aria-label="Live submission drawing"
+    >
+      <rect width={playback.canvasWidth} height={playback.canvasHeight} fill="white" />
+      {playback.lines.map((line, index) => (
+        <line
+          key={`${index}-${line.fromX}-${line.fromY}-${line.toX}-${line.toY}`}
+          x1={line.fromX}
+          y1={line.fromY}
+          x2={line.toX}
+          y2={line.toY}
+          stroke={line.color}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={line.strokeWidth}
+          strokeDasharray={line.length}
+          strokeDashoffset={line.length}
+          className="blackboard-live-line"
+          style={{ animationDuration: `${Math.max(line.durationMs, 1)}ms` }}
+        />
+      ))}
+    </svg>
+  )
+}
+
+function stepLabel(playback: LivePlayback) {
+  if (playback.currentStep === null) return playback.stepCount === null ? "starting" : `0 / ${playback.stepCount} steps`
+  if (playback.stepCount === null) return `step ${playback.currentStep + 1}`
+  return `${Math.min(playback.currentStep + 1, playback.stepCount)} / ${playback.stepCount} steps`
+}
+
+function animatedLineFromTraceLine(line: TraceLine | null, durationMs: number): AnimatedLine | null {
+  if (!line) return null
+  const length = Math.max(Math.hypot(line.to_x - line.from_x, line.to_y - line.from_y), 1)
+  return {
+    fromX: line.from_x,
+    fromY: line.from_y,
+    toX: line.to_x,
+    toY: line.to_y,
+    color: line.color,
+    strokeWidth: line.stroke_width,
+    durationMs,
+    length,
+  }
+}
+
+function parseBlackboardEvent(message: MessageEvent) {
+  try {
+    return JSON.parse(message.data) as BlackboardEvent
+  } catch {
+    return null
+  }
 }

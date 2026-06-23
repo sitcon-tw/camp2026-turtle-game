@@ -160,6 +160,60 @@ export type BlackboardState = {
   leaderboard: LeaderboardEntry[]
 }
 
+export type TraceLine = {
+  from_x: number
+  from_y: number
+  to_x: number
+  to_y: number
+  color: string
+  stroke_width: number
+}
+
+export type TraceStep = {
+  step_index: number
+  block_id: string
+  block_type: string
+  before: unknown
+  after: unknown
+  draw_line: TraceLine | null
+  duration_ms: number
+}
+
+export type BlackboardEvent =
+  | {
+      type: "score_recorded"
+      score_event: ScoreEvent
+    }
+  | {
+      type: "submission_updated"
+      submission_id: string
+    }
+  | {
+      type: "judging_started"
+      submission_id: string
+      team_id: string
+      challenge_id: string
+      canvas_width: number
+      canvas_height: number
+      step_count: number
+    }
+  | {
+      type: "judging_step"
+      submission_id: string
+      team_id: string
+      challenge_id: string
+      canvas_width: number
+      canvas_height: number
+      step: TraceStep
+      playback_ms: number
+    }
+  | {
+      type: "judging_completed"
+      submission_id: string
+      team_id: string
+      challenge_id: string
+    }
+
 export type ReadinessResponse = {
   ok: boolean
   database: string
