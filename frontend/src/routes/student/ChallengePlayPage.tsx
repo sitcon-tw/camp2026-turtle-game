@@ -28,6 +28,21 @@ registerTurtleBlocks()
 
 const EMPTY_WORKSPACE_XML = '<xml xmlns="https://developers.google.com/blockly/xml"></xml>'
 
+type BlocklyToolboxApi = {
+  setVisible: (isVisible: boolean) => void
+  autoHide?: (onlyClosePopups?: boolean) => void
+  clearSelection?: () => void
+  getSelectedItem?: () => unknown
+  getToolboxItems?: () => unknown[]
+  setSelectedItem?: (item: unknown) => void
+  __rtkKeepOpen?: boolean
+  __rtkLastSelectedItem?: unknown
+}
+
+type BlocklyWorkspaceSvgApi = {
+  getToolbox: () => BlocklyToolboxApi | null
+}
+
 export default function ChallengePlayPage() {
   const { challengeId } = useParams<{ challengeId: string }>()
   const queryClient = useQueryClient()
@@ -121,6 +136,64 @@ export default function ChallengePlayPage() {
     }
   }
 
+  function handleWorkspaceInject(newWorkspace: unknown) {
+    setWorkspace(newWorkspace as unknown as Workspace)
+
+    const toolbox = (newWorkspace as BlocklyWorkspaceSvgApi).getToolbox()
+    if (!toolbox) return
+
+    const typedToolbox = toolbox as BlocklyToolboxApi
+    if (typedToolbox.__rtkKeepOpen) {
+      typedToolbox.setVisible(true)
+      return
+    }
+
+    const originalSetVisible = typedToolbox.setVisible.bind(typedToolbox)
+    const originalClearSelection = typedToolbox.clearSelection?.bind(typedToolbox)
+    const originalSetSelectedItem = typedToolbox.setSelectedItem?.bind(typedToolbox)
+    const getPinnedToolboxItem = () => {
+      const selectedItem = typedToolbox.getSelectedItem?.()
+      if (selectedItem) {
+        typedToolbox.__rtkLastSelectedItem = selectedItem
+        return selectedItem
+      }
+
+      return typedToolbox.__rtkLastSelectedItem ?? typedToolbox.getToolboxItems?.()[0]
+    }
+    const keepToolboxOpen = () => {
+      originalSetVisible(true)
+      const selectedItem = getPinnedToolboxItem()
+      if (selectedItem && !typedToolbox.getSelectedItem?.()) {
+        originalSetSelectedItem?.(selectedItem)
+      }
+    }
+
+    typedToolbox.setVisible = () => originalSetVisible.call(typedToolbox, true)
+
+    if (typedToolbox.autoHide) {
+      typedToolbox.autoHide = () => keepToolboxOpen()
+    }
+
+    if (originalClearSelection) {
+      typedToolbox.clearSelection = () => {
+        originalClearSelection()
+        requestAnimationFrame(keepToolboxOpen)
+      }
+    }
+
+    if (originalSetSelectedItem) {
+      typedToolbox.setSelectedItem = (item: unknown) => {
+        const nextItem = item ?? getPinnedToolboxItem()
+        originalSetSelectedItem(nextItem)
+        typedToolbox.__rtkLastSelectedItem = nextItem
+        keepToolboxOpen()
+      }
+    }
+
+    typedToolbox.__rtkKeepOpen = true
+    keepToolboxOpen()
+  }
+
   if (!challengeId) {
     return <NavigateBackMessage title="找不到挑戰" description="請回到挑戰列表重新選擇題目。" />
   }
@@ -210,7 +283,7 @@ export default function ChallengePlayPage() {
                   scaleSpeed: 1.1,
                 },
               }}
-              onInject={(newWorkspace) => setWorkspace(newWorkspace as unknown as Workspace)}
+              onInject={handleWorkspaceInject}
               onDispose={() => setWorkspace(null)}
               onXmlChange={setWorkspaceXml}
               onImportXmlError={(error) => setActionError(studentErrorMessage(error))}
