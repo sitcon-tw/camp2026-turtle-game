@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::{
     auth::AuthenticatedUser,
     engine::{
-        BlockProgram, EngineError, TraceStep, interpret_program, pixel_similarity_png_bytes,
+        BlockProgram, EngineError, interpret_program, pixel_similarity_png_bytes,
         render_program_png,
     },
     error::AppError,
@@ -35,11 +35,7 @@ use crate::{
 };
 
 const RESULT_CONTENT_TYPE: &str = "image/png";
-const STATIC_STEP_PLAYBACK_MS: u64 = 80;
-const MIN_DRAW_PLAYBACK_MS: u64 = 120;
-const MAX_DRAW_PLAYBACK_MS: u64 = 900;
-const DRAW_PLAYBACK_MS_PER_PIXEL: f64 = 4.0;
-const MAX_TRACE_PLAYBACK_MS: u64 = 15_000;
+const TRACE_STEP_PLAYBACK_MS: u64 = 500;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -457,9 +453,7 @@ async fn play_trace_for_blackboard(
         step_count: trace.steps.len(),
     });
 
-    let mut elapsed_ms = 0_u64;
     for step in &trace.steps {
-        let playback_ms = playback_duration_ms(step, elapsed_ms);
         let receiver_count = state.event_bus.publish(AppEvent::JudgingStep {
             submission_id: submission.id,
             team_id: submission.team_id,
@@ -467,12 +461,11 @@ async fn play_trace_for_blackboard(
             canvas_width: program.canvas_width,
             canvas_height: program.canvas_height,
             step: step.clone(),
-            playback_ms,
+            playback_ms: TRACE_STEP_PLAYBACK_MS,
         });
 
-        elapsed_ms = elapsed_ms.saturating_add(playback_ms);
-        if receiver_count > 0 && playback_ms > 0 {
-            sleep(Duration::from_millis(playback_ms)).await;
+        if receiver_count > 0 {
+            sleep(Duration::from_millis(TRACE_STEP_PLAYBACK_MS)).await;
         }
     }
 
@@ -481,27 +474,6 @@ async fn play_trace_for_blackboard(
         team_id: submission.team_id,
         challenge_id: submission.challenge_id,
     });
-}
-
-fn playback_duration_ms(step: &TraceStep, elapsed_ms: u64) -> u64 {
-    if elapsed_ms >= MAX_TRACE_PLAYBACK_MS {
-        return 0;
-    }
-
-    let raw_duration = if step.duration_ms > 0 {
-        step.duration_ms
-    } else if let Some(line) = &step.draw_line {
-        let dx = line.to_x - line.from_x;
-        let dy = line.to_y - line.from_y;
-        let distance = dx.hypot(dy);
-        (distance * DRAW_PLAYBACK_MS_PER_PIXEL)
-            .round()
-            .clamp(MIN_DRAW_PLAYBACK_MS as f64, MAX_DRAW_PLAYBACK_MS as f64) as u64
-    } else {
-        STATIC_STEP_PLAYBACK_MS
-    };
-
-    raw_duration.min(MAX_TRACE_PLAYBACK_MS.saturating_sub(elapsed_ms))
 }
 
 fn similarity_for_challenge(

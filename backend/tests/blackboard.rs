@@ -221,6 +221,7 @@ async fn blackboard_events_stream_timed_judge_steps_and_judges_one_submission_at
     });
 
     let mut first_step_times = Vec::new();
+    let mut first_step_playback_ms = Vec::new();
     let mut first_completed_at = None;
     let mut second_started_at = None;
     while first_completed_at.is_none() || second_started_at.is_none() {
@@ -233,6 +234,11 @@ async fn blackboard_events_stream_timed_judge_steps_and_judges_one_submission_at
             && submission_id == Some(first_body["submission"]["id"].as_str().unwrap())
         {
             first_step_times.push(now);
+            first_step_playback_ms.push(
+                event["playback_ms"]
+                    .as_u64()
+                    .expect("playback_ms should be u64"),
+            );
             if first_step_times.len() == 1 {
                 let running_response = app
                     .clone()
@@ -266,7 +272,12 @@ async fn blackboard_events_stream_timed_judge_steps_and_judges_one_submission_at
 
     assert!(first_step_times.len() >= 2);
     assert!(
-        first_step_times[1].saturating_sub(first_step_times[0]) >= Duration::from_millis(300),
+        first_step_playback_ms
+            .iter()
+            .all(|playback_ms| *playback_ms == 500)
+    );
+    assert!(
+        first_step_times[1].saturating_sub(first_step_times[0]) >= Duration::from_millis(450),
         "successive stroke events should be separated by playback time"
     );
     assert!(
