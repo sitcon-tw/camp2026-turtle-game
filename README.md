@@ -42,7 +42,7 @@ Stop the containers:
 make docker-down
 ```
 
-Docker Compose uses named volumes for Cargo build output, frontend dependencies, pnpm cache, and backend storage so repeated starts are faster.
+Docker Compose uses named volumes for Cargo build output, frontend dependencies, and pnpm cache so repeated starts are faster.
 
 ## Useful Commands
 

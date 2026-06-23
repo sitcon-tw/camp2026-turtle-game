@@ -7,14 +7,12 @@ services:
       APP_HOST: 0.0.0.0
       APP_PORT: 3000
       AUTH_SECRET: development-secret-change-me
-      STORAGE_ROOT: /app/storage
       RUST_LOG: backend=info
     ports:
       - "3000:3000"
     volumes:
       - ./backend:/app/backend
       - backend-target:/app/backend/target
-      - backend-storage:/app/storage
 
   frontend:
     image: node:24-bookworm
@@ -33,6 +31,5 @@ services:
 
 volumes:
   backend-target:
-  backend-storage:
   frontend-node-modules:
   pnpm-store:
