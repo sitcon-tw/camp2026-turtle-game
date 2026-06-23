@@ -1,4 +1,4 @@
-use std::{collections::HashMap, convert::Infallible};
+use std::{collections::HashMap, convert::Infallible, time::Duration};
 
 use axum::{
     Json, Router,
@@ -13,13 +13,14 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::time::sleep;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use uuid::Uuid;
 
 use crate::{
     auth::AuthenticatedUser,
     engine::{
-        BlockProgram, EngineError, interpret_program, pixel_similarity_png_bytes,
+        BlockProgram, EngineError, TraceStep, interpret_program, pixel_similarity_png_bytes,
         render_program_png,
     },
     error::AppError,
@@ -34,6 +35,11 @@ use crate::{
 };
 
 const RESULT_CONTENT_TYPE: &str = "image/png";
+const STATIC_STEP_PLAYBACK_MS: u64 = 80;
+const MIN_DRAW_PLAYBACK_MS: u64 = 120;
+const MAX_DRAW_PLAYBACK_MS: u64 = 900;
+const DRAW_PLAYBACK_MS_PER_PIXEL: f64 = 4.0;
+const MAX_TRACE_PLAYBACK_MS: u64 = 15_000;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -342,6 +348,8 @@ async fn result_asset(
 }
 
 pub async fn judge_next_submission_once(state: AppState) -> Result<Option<Submission>, AppError> {
+    let _judge_guard = state.judge_lock.lock().await;
+
     if state.is_queue_paused()? {
         return Ok(None);
     }
@@ -389,6 +397,7 @@ async fn judge_submission(
         .map_err(|error| format_engine_error(EngineError::InvalidJson(error)))?;
     program.validate().map_err(format_engine_error)?;
     let trace = interpret_program(&program).map_err(format_engine_error)?;
+    play_trace_for_blackboard(state, submission, &program, &trace).await;
     let png = render_program_png(&program).map_err(format_engine_error)?;
     let similarity = similarity_for_challenge(state, &challenge, &png).map_err(public_app_error)?;
     let passed = similarity >= challenge.pass_threshold;
@@ -408,9 +417,9 @@ async fn judge_submission(
                 challenge.points,
             )) {
             Ok(event) => {
-                state
-                    .event_bus
-                    .publish(AppEvent::ScoreRecorded(event.clone()));
+                state.event_bus.publish(AppEvent::ScoreRecorded {
+                    score_event: event.clone(),
+                });
                 event.delta
             }
             Err(crate::state::StoreError::DuplicateChallengePass) => 0,
@@ -431,6 +440,68 @@ async fn judge_submission(
         result_image_path: None,
         result_image_url: Some(result_url),
     })
+}
+
+async fn play_trace_for_blackboard(
+    state: &AppState,
+    submission: &Submission,
+    program: &BlockProgram,
+    trace: &crate::engine::ExecutionTrace,
+) {
+    state.event_bus.publish(AppEvent::JudgingStarted {
+        submission_id: submission.id,
+        team_id: submission.team_id,
+        challenge_id: submission.challenge_id,
+        canvas_width: program.canvas_width,
+        canvas_height: program.canvas_height,
+        step_count: trace.steps.len(),
+    });
+
+    let mut elapsed_ms = 0_u64;
+    for step in &trace.steps {
+        let playback_ms = playback_duration_ms(step, elapsed_ms);
+        let receiver_count = state.event_bus.publish(AppEvent::JudgingStep {
+            submission_id: submission.id,
+            team_id: submission.team_id,
+            challenge_id: submission.challenge_id,
+            canvas_width: program.canvas_width,
+            canvas_height: program.canvas_height,
+            step: step.clone(),
+            playback_ms,
+        });
+
+        elapsed_ms = elapsed_ms.saturating_add(playback_ms);
+        if receiver_count > 0 && playback_ms > 0 {
+            sleep(Duration::from_millis(playback_ms)).await;
+        }
+    }
+
+    state.event_bus.publish(AppEvent::JudgingCompleted {
+        submission_id: submission.id,
+        team_id: submission.team_id,
+        challenge_id: submission.challenge_id,
+    });
+}
+
+fn playback_duration_ms(step: &TraceStep, elapsed_ms: u64) -> u64 {
+    if elapsed_ms >= MAX_TRACE_PLAYBACK_MS {
+        return 0;
+    }
+
+    let raw_duration = if step.duration_ms > 0 {
+        step.duration_ms
+    } else if let Some(line) = &step.draw_line {
+        let dx = line.to_x - line.from_x;
+        let dy = line.to_y - line.from_y;
+        let distance = dx.hypot(dy);
+        (distance * DRAW_PLAYBACK_MS_PER_PIXEL)
+            .round()
+            .clamp(MIN_DRAW_PLAYBACK_MS as f64, MAX_DRAW_PLAYBACK_MS as f64) as u64
+    } else {
+        STATIC_STEP_PLAYBACK_MS
+    };
+
+    raw_duration.min(MAX_TRACE_PLAYBACK_MS.saturating_sub(elapsed_ms))
 }
 
 fn similarity_for_challenge(
@@ -462,13 +533,36 @@ fn validated_program_value(value: Value) -> Result<Value, AppError> {
 
 fn event_visible_to_team(state: &AppState, team_id: TeamId, event: &AppEvent) -> bool {
     match event {
-        AppEvent::ScoreRecorded(score_event) => score_event.team_id == team_id,
+        AppEvent::ScoreRecorded { score_event } => score_event.team_id == team_id,
         AppEvent::SubmissionUpdated { submission_id } => state
             .repository
             .get_submission(*submission_id)
             .ok()
             .flatten()
             .is_some_and(|submission| submission.team_id == team_id),
+        AppEvent::JudgingStarted {
+            submission_id,
+            team_id: event_team_id,
+            ..
+        }
+        | AppEvent::JudgingStep {
+            submission_id,
+            team_id: event_team_id,
+            ..
+        }
+        | AppEvent::JudgingCompleted {
+            submission_id,
+            team_id: event_team_id,
+            ..
+        } => {
+            *event_team_id == team_id
+                || state
+                    .repository
+                    .get_submission(*submission_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|submission| submission.team_id == team_id)
+        }
     }
 }
 

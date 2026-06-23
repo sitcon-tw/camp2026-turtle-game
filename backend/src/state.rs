@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
     sync::{Arc, RwLock},
 };
 
@@ -8,10 +7,11 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast};
 
 use crate::{
     config::Config,
+    engine::TraceStep,
     models::{
         CanvasConfig, Challenge, ChallengeId, ChallengeProgressStatus, ChallengeSet,
         ChallengeSetId, ChallengeSetStatus, ScoreEvent, ScoreEventId, ScoreEventRefs,
@@ -25,30 +25,29 @@ const SUBMISSION_RATE_LIMIT_SECONDS: i64 = 3;
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
-    pub storage_root: Arc<PathBuf>,
     pub auth_secret: Arc<str>,
     pub event_bus: EventBus,
+    pub judge_lock: Arc<Mutex<()>>,
     pub queue_paused: Arc<RwLock<bool>>,
-    pub repository: InMemoryDatabase,
+    pub repository: Arc<dyn Repository>,
     pub asset_storage: InMemoryStorage,
     pub services: AppServices,
 }
 
 impl AppState {
     pub fn new(config: Config) -> Self {
-        let storage_root = Arc::new(config.storage_root.clone());
         let auth_secret: Arc<str> = Arc::from(config.auth_secret.clone());
         let config = Arc::new(config);
-        let repository = InMemoryDatabase::default();
+        let repository: Arc<dyn Repository> = Arc::new(InMemoryDatabase::default());
         let asset_storage = InMemoryStorage::default();
         let services =
-            AppServices::in_memory_with_handles(repository.clone(), asset_storage.clone());
+            AppServices::in_memory_with_handles(repository.clone(), Arc::new(asset_storage.clone()));
 
         Self {
             config,
-            storage_root,
             auth_secret,
             event_bus: EventBus::new(EVENT_BUS_CAPACITY),
+            judge_lock: Arc::new(Mutex::new(())),
             queue_paused: Arc::new(RwLock::new(false)),
             repository,
             asset_storage,
@@ -101,8 +100,34 @@ impl EventBus {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AppEvent {
-    ScoreRecorded(ScoreEvent),
-    SubmissionUpdated { submission_id: SubmissionId },
+    ScoreRecorded {
+        score_event: ScoreEvent,
+    },
+    SubmissionUpdated {
+        submission_id: SubmissionId,
+    },
+    JudgingStarted {
+        submission_id: SubmissionId,
+        team_id: TeamId,
+        challenge_id: ChallengeId,
+        canvas_width: u32,
+        canvas_height: u32,
+        step_count: usize,
+    },
+    JudgingStep {
+        submission_id: SubmissionId,
+        team_id: TeamId,
+        challenge_id: ChallengeId,
+        canvas_width: u32,
+        canvas_height: u32,
+        step: TraceStep,
+        playback_ms: u64,
+    },
+    JudgingCompleted {
+        submission_id: SubmissionId,
+        team_id: TeamId,
+        challenge_id: ChallengeId,
+    },
 }
 
 #[derive(Clone)]
@@ -113,13 +138,19 @@ pub struct AppServices {
 
 impl AppServices {
     pub fn in_memory() -> Self {
-        Self::in_memory_with_handles(InMemoryDatabase::default(), InMemoryStorage::default())
+        Self::in_memory_with_handles(
+            Arc::new(InMemoryDatabase::default()),
+            Arc::new(InMemoryStorage::default()),
+        )
     }
 
-    pub fn in_memory_with_handles(database: InMemoryDatabase, storage: InMemoryStorage) -> Self {
+    pub fn in_memory_with_handles(
+        database: Arc<dyn Repository>,
+        storage: Arc<dyn Storage>,
+    ) -> Self {
         Self {
-            database: Arc::new(database),
-            storage: Arc::new(storage),
+            database,
+            storage,
         }
     }
 }
@@ -130,6 +161,129 @@ pub trait Database: Send + Sync + 'static {
 
 pub trait Storage: Send + Sync + 'static {
     fn readiness(&self) -> ServiceReadiness;
+}
+
+pub trait Repository: Database {
+    fn create_team(
+        &self,
+        name: &str,
+        login_code: &str,
+        note: Option<String>,
+    ) -> Result<Team, StoreError>;
+    fn get_team(&self, team_id: TeamId) -> Result<Option<Team>, StoreError>;
+    fn team_by_login_code(&self, login_code: &str) -> Result<Option<Team>, StoreError>;
+    fn list_teams(&self) -> Result<Vec<Team>, StoreError>;
+    fn set_team_enabled(&self, team_id: TeamId, enabled: bool) -> Result<Team, StoreError>;
+    fn update_team(&self, team_id: TeamId, update: TeamUpdate) -> Result<Team, StoreError>;
+
+    fn create_challenge_set(
+        &self,
+        name: &str,
+        version: &str,
+        status: ChallengeSetStatus,
+    ) -> Result<ChallengeSet, StoreError>;
+    fn activate_challenge_set(
+        &self,
+        challenge_set_id: ChallengeSetId,
+    ) -> Result<ChallengeSet, StoreError>;
+    fn get_challenge_set(
+        &self,
+        challenge_set_id: ChallengeSetId,
+    ) -> Result<Option<ChallengeSet>, StoreError>;
+    fn list_challenge_sets(&self) -> Result<Vec<ChallengeSet>, StoreError>;
+    fn active_challenge_set(&self) -> Result<Option<ChallengeSet>, StoreError>;
+    fn archive_challenge_set(
+        &self,
+        challenge_set_id: ChallengeSetId,
+    ) -> Result<ChallengeSet, StoreError>;
+
+    fn create_challenge(&self, input: NewChallenge) -> Result<Challenge, StoreError>;
+    fn get_challenge(&self, challenge_id: ChallengeId) -> Result<Option<Challenge>, StoreError>;
+    fn list_challenges(
+        &self,
+        challenge_set_id: ChallengeSetId,
+    ) -> Result<Vec<Challenge>, StoreError>;
+    fn list_all_challenges(&self) -> Result<Vec<Challenge>, StoreError>;
+    fn update_challenge(
+        &self,
+        challenge_id: ChallengeId,
+        update: ChallengeUpdate,
+    ) -> Result<Challenge, StoreError>;
+    fn update_challenge_target_image(
+        &self,
+        challenge_id: ChallengeId,
+        update: ChallengeTargetImageUpdate,
+    ) -> Result<Challenge, StoreError>;
+    fn disable_challenge(&self, challenge_id: ChallengeId) -> Result<Challenge, StoreError>;
+    fn reorder_challenges(
+        &self,
+        reorders: &[ChallengeReorder],
+    ) -> Result<Vec<Challenge>, StoreError>;
+    fn team_challenge_progress(
+        &self,
+        team_id: TeamId,
+        challenge_id: ChallengeId,
+    ) -> Result<TeamChallengeProgress, StoreError>;
+    fn challenge_stats(&self, challenge_id: ChallengeId) -> Result<ChallengeStats, StoreError>;
+
+    fn create_submission(
+        &self,
+        team_id: TeamId,
+        challenge_id: ChallengeId,
+        block_program: Value,
+        retry_of: Option<SubmissionId>,
+    ) -> Result<Submission, StoreError>;
+    fn submission_rate_limit(
+        &self,
+        team_id: TeamId,
+        now: DateTime<Utc>,
+    ) -> Result<RateLimitStatus, StoreError>;
+    fn list_queued_running_submissions(&self) -> Result<Vec<Submission>, StoreError>;
+    fn queue_position(&self, submission_id: SubmissionId) -> Result<Option<usize>, StoreError>;
+    fn cancel_queued_submission(
+        &self,
+        submission_id: SubmissionId,
+    ) -> Result<Submission, StoreError>;
+    fn prioritize_submission(
+        &self,
+        submission_id: SubmissionId,
+        priority: i32,
+    ) -> Result<Submission, StoreError>;
+    fn pop_next_queued_submission(&self) -> Result<Option<Submission>, StoreError>;
+    fn mark_submission_running(&self, submission_id: SubmissionId) -> Result<Submission, StoreError>;
+    fn mark_submission_completed(
+        &self,
+        submission_id: SubmissionId,
+        result: CompletedSubmission,
+    ) -> Result<Submission, StoreError>;
+    fn mark_submission_failed(
+        &self,
+        submission_id: SubmissionId,
+        error_message: String,
+    ) -> Result<Submission, StoreError>;
+    fn get_submission(&self, submission_id: SubmissionId) -> Result<Option<Submission>, StoreError>;
+    fn list_submissions(
+        &self,
+        filter: SubmissionListFilter,
+    ) -> Result<Vec<Submission>, StoreError>;
+
+    fn append_score_event(&self, input: ScoreEventInput) -> Result<ScoreEvent, StoreError>;
+    fn append_score_events_bulk(
+        &self,
+        inputs: Vec<ScoreEventInput>,
+    ) -> Result<Vec<ScoreEvent>, StoreError>;
+    fn list_score_events(
+        &self,
+        filter: ScoreEventListFilter,
+    ) -> Result<Vec<ScoreEvent>, StoreError>;
+    fn recalculate_scores_from_events(&self) -> Result<Vec<Team>, StoreError>;
+    fn recalculate_challenge_pass_awards(&self) -> Result<Vec<Team>, StoreError>;
+    fn leaderboard(&self) -> Result<Vec<Team>, StoreError>;
+    fn challenge_progress(
+        &self,
+        team_id: TeamId,
+        challenge_id: ChallengeId,
+    ) -> Result<ChallengeProgressStatus, StoreError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -353,6 +507,247 @@ pub struct CompletedSubmission {
 #[derive(Debug, Default, Clone)]
 pub struct InMemoryDatabase {
     inner: Arc<RwLock<StoreInner>>,
+}
+
+impl Repository for InMemoryDatabase {
+    fn create_team(
+        &self,
+        name: &str,
+        login_code: &str,
+        note: Option<String>,
+    ) -> Result<Team, StoreError> {
+        InMemoryDatabase::create_team(self, name.to_owned(), login_code.to_owned(), note)
+    }
+
+    fn get_team(&self, team_id: TeamId) -> Result<Option<Team>, StoreError> {
+        InMemoryDatabase::get_team(self, team_id)
+    }
+
+    fn team_by_login_code(&self, login_code: &str) -> Result<Option<Team>, StoreError> {
+        InMemoryDatabase::team_by_login_code(self, login_code)
+    }
+
+    fn list_teams(&self) -> Result<Vec<Team>, StoreError> {
+        InMemoryDatabase::list_teams(self)
+    }
+
+    fn set_team_enabled(&self, team_id: TeamId, enabled: bool) -> Result<Team, StoreError> {
+        InMemoryDatabase::set_team_enabled(self, team_id, enabled)
+    }
+
+    fn update_team(&self, team_id: TeamId, update: TeamUpdate) -> Result<Team, StoreError> {
+        InMemoryDatabase::update_team(self, team_id, update)
+    }
+
+    fn create_challenge_set(
+        &self,
+        name: &str,
+        version: &str,
+        status: ChallengeSetStatus,
+    ) -> Result<ChallengeSet, StoreError> {
+        InMemoryDatabase::create_challenge_set(self, name.to_owned(), version.to_owned(), status)
+    }
+
+    fn activate_challenge_set(
+        &self,
+        challenge_set_id: ChallengeSetId,
+    ) -> Result<ChallengeSet, StoreError> {
+        InMemoryDatabase::activate_challenge_set(self, challenge_set_id)
+    }
+
+    fn get_challenge_set(
+        &self,
+        challenge_set_id: ChallengeSetId,
+    ) -> Result<Option<ChallengeSet>, StoreError> {
+        InMemoryDatabase::get_challenge_set(self, challenge_set_id)
+    }
+
+    fn list_challenge_sets(&self) -> Result<Vec<ChallengeSet>, StoreError> {
+        InMemoryDatabase::list_challenge_sets(self)
+    }
+
+    fn active_challenge_set(&self) -> Result<Option<ChallengeSet>, StoreError> {
+        InMemoryDatabase::active_challenge_set(self)
+    }
+
+    fn archive_challenge_set(
+        &self,
+        challenge_set_id: ChallengeSetId,
+    ) -> Result<ChallengeSet, StoreError> {
+        InMemoryDatabase::archive_challenge_set(self, challenge_set_id)
+    }
+
+    fn create_challenge(&self, input: NewChallenge) -> Result<Challenge, StoreError> {
+        InMemoryDatabase::create_challenge(self, input)
+    }
+
+    fn get_challenge(&self, challenge_id: ChallengeId) -> Result<Option<Challenge>, StoreError> {
+        InMemoryDatabase::get_challenge(self, challenge_id)
+    }
+
+    fn list_challenges(
+        &self,
+        challenge_set_id: ChallengeSetId,
+    ) -> Result<Vec<Challenge>, StoreError> {
+        InMemoryDatabase::list_challenges(self, challenge_set_id)
+    }
+
+    fn list_all_challenges(&self) -> Result<Vec<Challenge>, StoreError> {
+        InMemoryDatabase::list_all_challenges(self)
+    }
+
+    fn update_challenge(
+        &self,
+        challenge_id: ChallengeId,
+        update: ChallengeUpdate,
+    ) -> Result<Challenge, StoreError> {
+        InMemoryDatabase::update_challenge(self, challenge_id, update)
+    }
+
+    fn update_challenge_target_image(
+        &self,
+        challenge_id: ChallengeId,
+        update: ChallengeTargetImageUpdate,
+    ) -> Result<Challenge, StoreError> {
+        InMemoryDatabase::update_challenge_target_image(self, challenge_id, update)
+    }
+
+    fn disable_challenge(&self, challenge_id: ChallengeId) -> Result<Challenge, StoreError> {
+        InMemoryDatabase::disable_challenge(self, challenge_id)
+    }
+
+    fn reorder_challenges(
+        &self,
+        reorders: &[ChallengeReorder],
+    ) -> Result<Vec<Challenge>, StoreError> {
+        InMemoryDatabase::reorder_challenges(self, reorders)
+    }
+
+    fn team_challenge_progress(
+        &self,
+        team_id: TeamId,
+        challenge_id: ChallengeId,
+    ) -> Result<TeamChallengeProgress, StoreError> {
+        InMemoryDatabase::team_challenge_progress(self, team_id, challenge_id)
+    }
+
+    fn challenge_stats(&self, challenge_id: ChallengeId) -> Result<ChallengeStats, StoreError> {
+        InMemoryDatabase::challenge_stats(self, challenge_id)
+    }
+
+    fn create_submission(
+        &self,
+        team_id: TeamId,
+        challenge_id: ChallengeId,
+        block_program: Value,
+        retry_of: Option<SubmissionId>,
+    ) -> Result<Submission, StoreError> {
+        InMemoryDatabase::create_submission(self, team_id, challenge_id, block_program, retry_of)
+    }
+
+    fn submission_rate_limit(
+        &self,
+        team_id: TeamId,
+        now: DateTime<Utc>,
+    ) -> Result<RateLimitStatus, StoreError> {
+        InMemoryDatabase::submission_rate_limit(self, team_id, now)
+    }
+
+    fn list_queued_running_submissions(&self) -> Result<Vec<Submission>, StoreError> {
+        InMemoryDatabase::list_queued_running_submissions(self)
+    }
+
+    fn queue_position(&self, submission_id: SubmissionId) -> Result<Option<usize>, StoreError> {
+        InMemoryDatabase::queue_position(self, submission_id)
+    }
+
+    fn cancel_queued_submission(
+        &self,
+        submission_id: SubmissionId,
+    ) -> Result<Submission, StoreError> {
+        InMemoryDatabase::cancel_queued_submission(self, submission_id)
+    }
+
+    fn prioritize_submission(
+        &self,
+        submission_id: SubmissionId,
+        priority: i32,
+    ) -> Result<Submission, StoreError> {
+        InMemoryDatabase::prioritize_submission(self, submission_id, priority)
+    }
+
+    fn pop_next_queued_submission(&self) -> Result<Option<Submission>, StoreError> {
+        InMemoryDatabase::pop_next_queued_submission(self)
+    }
+
+    fn mark_submission_running(&self, submission_id: SubmissionId) -> Result<Submission, StoreError> {
+        InMemoryDatabase::mark_submission_running(self, submission_id)
+    }
+
+    fn mark_submission_completed(
+        &self,
+        submission_id: SubmissionId,
+        result: CompletedSubmission,
+    ) -> Result<Submission, StoreError> {
+        InMemoryDatabase::mark_submission_completed(self, submission_id, result)
+    }
+
+    fn mark_submission_failed(
+        &self,
+        submission_id: SubmissionId,
+        error_message: String,
+    ) -> Result<Submission, StoreError> {
+        InMemoryDatabase::mark_submission_failed(self, submission_id, error_message)
+    }
+
+    fn get_submission(&self, submission_id: SubmissionId) -> Result<Option<Submission>, StoreError> {
+        InMemoryDatabase::get_submission(self, submission_id)
+    }
+
+    fn list_submissions(
+        &self,
+        filter: SubmissionListFilter,
+    ) -> Result<Vec<Submission>, StoreError> {
+        InMemoryDatabase::list_submissions(self, filter)
+    }
+
+    fn append_score_event(&self, input: ScoreEventInput) -> Result<ScoreEvent, StoreError> {
+        InMemoryDatabase::append_score_event(self, input)
+    }
+
+    fn append_score_events_bulk(
+        &self,
+        inputs: Vec<ScoreEventInput>,
+    ) -> Result<Vec<ScoreEvent>, StoreError> {
+        InMemoryDatabase::append_score_events_bulk(self, inputs)
+    }
+
+    fn list_score_events(
+        &self,
+        filter: ScoreEventListFilter,
+    ) -> Result<Vec<ScoreEvent>, StoreError> {
+        InMemoryDatabase::list_score_events(self, filter)
+    }
+
+    fn recalculate_scores_from_events(&self) -> Result<Vec<Team>, StoreError> {
+        InMemoryDatabase::recalculate_scores_from_events(self)
+    }
+
+    fn recalculate_challenge_pass_awards(&self) -> Result<Vec<Team>, StoreError> {
+        InMemoryDatabase::recalculate_challenge_pass_awards(self)
+    }
+
+    fn leaderboard(&self) -> Result<Vec<Team>, StoreError> {
+        InMemoryDatabase::leaderboard(self)
+    }
+
+    fn challenge_progress(
+        &self,
+        team_id: TeamId,
+        challenge_id: ChallengeId,
+    ) -> Result<ChallengeProgressStatus, StoreError> {
+        InMemoryDatabase::challenge_progress(self, team_id, challenge_id)
+    }
 }
 
 impl InMemoryDatabase {

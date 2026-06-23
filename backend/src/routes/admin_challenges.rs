@@ -90,7 +90,7 @@ async fn create_challenge_set(
     let version = non_empty_trimmed(payload.version, "version")?;
     let challenge_set = state
         .repository
-        .create_challenge_set(name, version, ChallengeSetStatus::Draft)
+        .create_challenge_set(&name, &version, ChallengeSetStatus::Draft)
         .map_err(store_error)?;
     Ok((
         StatusCode::CREATED,
@@ -111,8 +111,8 @@ async fn import_challenge_set(
     let challenge_set = state
         .repository
         .create_challenge_set(
-            imported.manifest.name,
-            imported.manifest.version,
+            &imported.manifest.name,
+            &imported.manifest.version,
             ChallengeSetStatus::Draft,
         )
         .map_err(store_error)?;

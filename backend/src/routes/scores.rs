@@ -76,9 +76,9 @@ async fn bulk_adjust_scores(
     let inputs = payload.into_score_event_inputs(created_by)?;
     let events = state.repository.append_score_events_bulk(inputs)?;
     for event in &events {
-        state
-            .event_bus
-            .publish(AppEvent::ScoreRecorded(event.clone()));
+        state.event_bus.publish(AppEvent::ScoreRecorded {
+            score_event: event.clone(),
+        });
     }
     Ok(Json(BulkAdjustResponse {
         updated_teams: events.into_iter().map(BulkAdjustedTeam::from).collect(),

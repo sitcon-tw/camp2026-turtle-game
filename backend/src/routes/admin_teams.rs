@@ -226,7 +226,7 @@ fn create_team_from_request(
 
     state
         .repository
-        .create_team(name, login_code, normalize_note(request.note))
+        .create_team(&name, &login_code, normalize_note(request.note))
         .map_err(map_store_error)
 }
 

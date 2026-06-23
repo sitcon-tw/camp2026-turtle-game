@@ -1,11 +1,10 @@
-use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{env, net::SocketAddr, time::Duration};
 
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind_addr: SocketAddr,
-    pub storage_root: PathBuf,
     pub auth_secret: String,
     pub token_ttl: Duration,
 }
@@ -25,9 +24,6 @@ impl Config {
             .parse()
             .map_err(|source| ConfigError::InvalidBindAddress { source })?;
 
-        let storage_root = optional_env("STORAGE_ROOT")?
-            .map(PathBuf::from)
-            .unwrap_or(default.storage_root);
         let auth_secret = optional_env("AUTH_SECRET")?.unwrap_or(default.auth_secret);
         if auth_secret.trim().is_empty() {
             return Err(ConfigError::EmptyAuthSecret);
@@ -45,7 +41,6 @@ impl Config {
 
         Ok(Self {
             bind_addr,
-            storage_root,
             auth_secret,
             token_ttl: Duration::from_secs(token_ttl_seconds),
         })
@@ -64,7 +59,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             bind_addr: SocketAddr::from(([127, 0, 0, 1], 3000)),
-            storage_root: PathBuf::from("storage"),
             auth_secret: "development-secret-change-me".to_owned(),
             token_ttl: Duration::from_secs(60 * 60),
         }

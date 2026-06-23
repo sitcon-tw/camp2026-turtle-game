@@ -3,9 +3,9 @@ use std::error::Error;
 use backend::{
     config::Config, router, routes::submissions::judge_next_submission_once, state::AppState,
 };
+use dotenvy::dotenv;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
-use dotenvy::dotenv;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
