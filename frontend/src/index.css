@@ -140,3 +140,9 @@
 .blocklyToolboxCategory:focus-visible {
   outline: none;
 }
+
+.blocklyToolbox .blocklyTreeLabel,
+.blocklyToolbox .blocklyToolboxCategory .blocklyToolboxCategoryLabel,
+.blocklyToolbox .blocklyToolboxSelected .blocklyToolboxCategoryLabel {
+  color: #000 !important;
+}
