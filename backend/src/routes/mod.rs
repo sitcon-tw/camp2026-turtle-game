@@ -4,6 +4,7 @@ pub mod admin_teams;
 pub mod auth;
 pub mod blackboard;
 pub mod challenges;
+pub mod game;
 pub mod health;
 pub mod scores;
 pub mod submissions;
@@ -28,6 +29,7 @@ fn api_v1_router() -> Router<AppState> {
         .merge(auth::router())
         .merge(admin_teams::router())
         .merge(challenges::router())
+        .merge(game::router())
         .merge(admin_challenges::router())
         .merge(submissions::router())
         .merge(admin_submissions::router())

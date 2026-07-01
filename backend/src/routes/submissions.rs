@@ -439,7 +439,11 @@ async fn judge_submission(
         .asset_storage
         .put_asset(asset_id.clone(), RESULT_CONTENT_TYPE, png)
         .map_err(public_store_error)?;
-    let awarded_points = if passed {
+    let is_game_round_submission = state
+        .game
+        .is_round_submission(submission.id)
+        .map_err(|error| error.to_string())?;
+    let awarded_points = if passed && !is_game_round_submission {
         match state
             .repository
             .append_score_event(ScoreEventInput::challenge_pass(
@@ -549,6 +553,7 @@ fn event_visible_to_team(state: &AppState, team_id: TeamId, event: &AppEvent) ->
             .ok()
             .flatten()
             .is_some_and(|submission| submission.team_id == team_id),
+        AppEvent::GameStateChanged { .. } | AppEvent::RoundUpdated { .. } => true,
         AppEvent::JudgingStarted {
             submission_id,
             team_id: event_team_id,

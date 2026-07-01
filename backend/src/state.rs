@@ -14,8 +14,10 @@ use crate::{
     engine::TraceStep,
     models::{
         CanvasConfig, Challenge, ChallengeId, ChallengeProgressStatus, ChallengeSet,
-        ChallengeSetId, ChallengeSetStatus, ScoreEvent, ScoreEventId, ScoreEventRefs,
-        ScoreEventType, Submission, SubmissionId, SubmissionStatus, Team, TeamId,
+        ChallengeSetId, ChallengeSetStatus, GamePhase, GameStateView, PublicVote, PublicVoteChoice,
+        Round, RoundId, RoundResultEntry, ScoreEvent, ScoreEventId, ScoreEventRefs, ScoreEventType,
+        Submission, SubmissionId, SubmissionStatus, Team, TeamId, TeamNomination,
+        TeamSelectionVote,
     },
 };
 
@@ -32,6 +34,7 @@ pub struct AppState {
     pub repository: Arc<dyn Repository>,
     pub asset_storage: InMemoryStorage,
     pub services: AppServices,
+    pub game: GameStore,
 }
 
 impl AppState {
@@ -40,8 +43,10 @@ impl AppState {
         let config = Arc::new(config);
         let repository: Arc<dyn Repository> = Arc::new(InMemoryDatabase::default());
         let asset_storage = InMemoryStorage::default();
-        let services =
-            AppServices::in_memory_with_handles(repository.clone(), Arc::new(asset_storage.clone()));
+        let services = AppServices::in_memory_with_handles(
+            repository.clone(),
+            Arc::new(asset_storage.clone()),
+        );
 
         Self {
             config,
@@ -52,6 +57,7 @@ impl AppState {
             repository,
             asset_storage,
             services,
+            game: GameStore::default(),
         }
     }
 
@@ -129,6 +135,13 @@ pub enum AppEvent {
         team_id: TeamId,
         challenge_id: ChallengeId,
     },
+    GameStateChanged {
+        version: i64,
+    },
+    RoundUpdated {
+        round_id: RoundId,
+        version: i64,
+    },
 }
 
 #[derive(Clone)]
@@ -149,10 +162,7 @@ impl AppServices {
         database: Arc<dyn Repository>,
         storage: Arc<dyn Storage>,
     ) -> Self {
-        Self {
-            database,
-            storage,
-        }
+        Self { database, storage }
     }
 }
 
@@ -251,7 +261,10 @@ pub trait Repository: Database {
         priority: i32,
     ) -> Result<Submission, StoreError>;
     fn pop_next_queued_submission(&self) -> Result<Option<Submission>, StoreError>;
-    fn mark_submission_running(&self, submission_id: SubmissionId) -> Result<Submission, StoreError>;
+    fn mark_submission_running(
+        &self,
+        submission_id: SubmissionId,
+    ) -> Result<Submission, StoreError>;
     fn mark_submission_completed(
         &self,
         submission_id: SubmissionId,
@@ -262,11 +275,10 @@ pub trait Repository: Database {
         submission_id: SubmissionId,
         error_message: String,
     ) -> Result<Submission, StoreError>;
-    fn get_submission(&self, submission_id: SubmissionId) -> Result<Option<Submission>, StoreError>;
-    fn list_submissions(
-        &self,
-        filter: SubmissionListFilter,
-    ) -> Result<Vec<Submission>, StoreError>;
+    fn get_submission(&self, submission_id: SubmissionId)
+    -> Result<Option<Submission>, StoreError>;
+    fn list_submissions(&self, filter: SubmissionListFilter)
+    -> Result<Vec<Submission>, StoreError>;
 
     fn append_score_event(&self, input: ScoreEventInput) -> Result<ScoreEvent, StoreError>;
     fn append_score_events_bulk(
@@ -285,6 +297,582 @@ pub trait Repository: Database {
         team_id: TeamId,
         challenge_id: ChallengeId,
     ) -> Result<ChallengeProgressStatus, StoreError>;
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum GameError {
+    #[error("game store lock is unavailable")]
+    LockUnavailable,
+    #[error("challenge was not found")]
+    ChallengeNotFound,
+    #[error("team was not found")]
+    TeamNotFound,
+    #[error("round is not active")]
+    NoActiveRound,
+    #[error("game phase does not allow this action")]
+    InvalidPhase,
+    #[error("phase deadline has passed")]
+    DeadlinePassed,
+    #[error("submission was not found")]
+    SubmissionNotFound,
+    #[error("submission does not belong to the current round")]
+    SubmissionNotInRound,
+    #[error("submission belongs to another team")]
+    SubmissionTeamMismatch,
+    #[error("public vote choices are invalid")]
+    InvalidPublicVote,
+    #[error("team nomination was not found")]
+    NominationNotFound,
+}
+
+#[derive(Debug, Clone)]
+pub struct GameSnapshot {
+    pub state: GameStateView,
+    pub round: Option<Round>,
+    pub challenge: Option<Challenge>,
+    pub my_submissions: Vec<Submission>,
+    pub nominations: Vec<TeamNomination>,
+    pub my_team_selection_vote: Option<TeamSelectionVote>,
+    pub my_public_vote: Option<PublicVote>,
+    pub results: Vec<RoundResultEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StartRoundInput {
+    pub challenge_id: ChallengeId,
+    pub submission_seconds: i64,
+    pub public_votes_per_team: u8,
+    pub created_by: Option<String>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct GameStore {
+    inner: Arc<RwLock<GameInner>>,
+}
+
+impl GameStore {
+    pub fn snapshot(
+        &self,
+        repository: &dyn Repository,
+        team_id: Option<TeamId>,
+    ) -> Result<GameSnapshot, GameError> {
+        let inner = self.read_inner()?;
+        let state = inner.view(Utc::now());
+        let round = inner.current_round();
+        let challenge = state
+            .current_challenge_id
+            .and_then(|challenge_id| repository.get_challenge(challenge_id).ok().flatten());
+        let my_submissions =
+            if let (Some(round_id), Some(team_id)) = (state.current_round_id, team_id) {
+                inner
+                    .round_submissions
+                    .iter()
+                    .filter(|(_, stored_round_id)| **stored_round_id == round_id)
+                    .filter_map(|(submission_id, _)| {
+                        repository.get_submission(*submission_id).ok().flatten()
+                    })
+                    .filter(|submission| submission.team_id == team_id)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        let nominations = state
+            .current_round_id
+            .map(|round_id| inner.nominations_for_round(round_id))
+            .unwrap_or_default();
+        let my_team_selection_vote = match (state.current_round_id, team_id) {
+            (Some(round_id), Some(team_id)) => inner
+                .team_selection_votes
+                .values()
+                .find(|vote| vote.round_id == round_id && vote.team_id == team_id)
+                .cloned(),
+            _ => None,
+        };
+        let my_public_vote = match (state.current_round_id, team_id) {
+            (Some(round_id), Some(team_id)) => {
+                inner.public_votes.get(&(round_id, team_id)).cloned()
+            }
+            _ => None,
+        };
+        let results = state
+            .current_round_id
+            .and_then(|round_id| inner.results.get(&round_id).cloned())
+            .unwrap_or_default();
+        Ok(GameSnapshot {
+            state,
+            round,
+            challenge,
+            my_submissions,
+            nominations,
+            my_team_selection_vote,
+            my_public_vote,
+            results,
+        })
+    }
+
+    pub fn start_round(
+        &self,
+        repository: &dyn Repository,
+        input: StartRoundInput,
+    ) -> Result<GameStateView, GameError> {
+        let challenge = repository
+            .get_challenge(input.challenge_id)
+            .map_err(|_| GameError::ChallengeNotFound)?
+            .ok_or(GameError::ChallengeNotFound)?;
+        if !challenge.enabled {
+            return Err(GameError::ChallengeNotFound);
+        }
+        let mut inner = self.write_inner()?;
+        let now = Utc::now();
+        let round = Round {
+            id: RoundId::new(),
+            challenge_id: input.challenge_id,
+            started_at: now,
+            submission_ends_at: now + Duration::seconds(input.submission_seconds.max(1)),
+            team_selection_ends_at: None,
+            public_voting_ends_at: None,
+            completed_at: None,
+        };
+        inner.current_round_id = Some(round.id);
+        inner.current_challenge_id = Some(input.challenge_id);
+        inner.phase = GamePhase::SubmissionOpen;
+        inner.phase_started_at = now;
+        inner.phase_ends_at = Some(round.submission_ends_at);
+        inner.public_votes_per_team = input.public_votes_per_team.max(1);
+        inner.updated_at = now;
+        inner.updated_by = input.created_by;
+        inner.version = inner.version.saturating_add(1);
+        inner.rounds.insert(round.id, round);
+        Ok(inner.view(now))
+    }
+
+    pub fn update_timer(
+        &self,
+        phase_ends_at: DateTime<Utc>,
+        updated_by: Option<String>,
+    ) -> Result<GameStateView, GameError> {
+        let mut inner = self.write_inner()?;
+        if inner.phase == GamePhase::Idle {
+            return Err(GameError::NoActiveRound);
+        }
+        let now = Utc::now();
+        inner.phase_ends_at = Some(phase_ends_at);
+        let phase = inner.phase;
+        if let Some(round_id) = inner.current_round_id
+            && let Some(round) = inner.rounds.get_mut(&round_id)
+        {
+            match phase {
+                GamePhase::SubmissionOpen => round.submission_ends_at = phase_ends_at,
+                GamePhase::TeamSelection => round.team_selection_ends_at = Some(phase_ends_at),
+                GamePhase::PublicVoting => round.public_voting_ends_at = Some(phase_ends_at),
+                _ => {}
+            }
+        }
+        inner.updated_at = now;
+        inner.updated_by = updated_by;
+        inner.version = inner.version.saturating_add(1);
+        Ok(inner.view(now))
+    }
+
+    pub fn set_phase(
+        &self,
+        phase: GamePhase,
+        updated_by: Option<String>,
+    ) -> Result<GameStateView, GameError> {
+        let mut inner = self.write_inner()?;
+        let round_id = inner.current_round_id.ok_or(GameError::NoActiveRound)?;
+        let now = Utc::now();
+        if phase == GamePhase::TeamSelection {
+            inner.lock_nominations(round_id, now);
+        }
+        if phase == GamePhase::PublicVoting {
+            inner.lock_nominations(round_id, now);
+        }
+        let ends_at = match phase {
+            GamePhase::TeamSelection => Some(now + Duration::seconds(inner.team_selection_seconds)),
+            GamePhase::SubmissionOpen => inner
+                .rounds
+                .get(&round_id)
+                .map(|round| round.submission_ends_at),
+            GamePhase::PublicVoting => Some(now + Duration::seconds(60)),
+            GamePhase::Scoring | GamePhase::RoundComplete | GamePhase::Idle => None,
+        };
+        if let Some(round) = inner.rounds.get_mut(&round_id) {
+            if phase == GamePhase::TeamSelection {
+                round.team_selection_ends_at = ends_at;
+            }
+            if phase == GamePhase::PublicVoting {
+                round.public_voting_ends_at = ends_at;
+            }
+            if phase == GamePhase::RoundComplete {
+                round.completed_at = Some(now);
+            }
+        }
+        inner.phase = phase;
+        inner.phase_started_at = now;
+        inner.phase_ends_at = ends_at;
+        inner.updated_at = now;
+        inner.updated_by = updated_by;
+        inner.version = inner.version.saturating_add(1);
+        Ok(inner.view(now))
+    }
+
+    pub fn is_round_submission(&self, submission_id: SubmissionId) -> Result<bool, GameError> {
+        Ok(self
+            .read_inner()?
+            .round_submissions
+            .contains_key(&submission_id))
+    }
+
+    pub fn attach_submission(&self, submission: &Submission) -> Result<GameStateView, GameError> {
+        let mut inner = self.write_inner()?;
+        let now = Utc::now();
+        if inner.phase != GamePhase::SubmissionOpen {
+            return Err(GameError::InvalidPhase);
+        }
+        if inner.phase_ends_at.is_some_and(|deadline| now > deadline) {
+            return Err(GameError::DeadlinePassed);
+        }
+        let round_id = inner.current_round_id.ok_or(GameError::NoActiveRound)?;
+        if inner.current_challenge_id != Some(submission.challenge_id) {
+            return Err(GameError::SubmissionNotInRound);
+        }
+        inner.round_submissions.insert(submission.id, round_id);
+        inner.version = inner.version.saturating_add(1);
+        inner.updated_at = now;
+        Ok(inner.view(now))
+    }
+
+    pub fn record_team_selection_vote(
+        &self,
+        repository: &dyn Repository,
+        team_id: TeamId,
+        device_id: String,
+        submission_id: SubmissionId,
+    ) -> Result<(TeamSelectionVote, GameStateView), GameError> {
+        let submission = repository
+            .get_submission(submission_id)
+            .map_err(|_| GameError::SubmissionNotFound)?
+            .ok_or(GameError::SubmissionNotFound)?;
+        if submission.team_id != team_id {
+            return Err(GameError::SubmissionTeamMismatch);
+        }
+        let mut inner = self.write_inner()?;
+        let now = Utc::now();
+        if inner.phase != GamePhase::TeamSelection {
+            return Err(GameError::InvalidPhase);
+        }
+        if inner.phase_ends_at.is_some_and(|deadline| now > deadline) {
+            return Err(GameError::DeadlinePassed);
+        }
+        let round_id = inner.current_round_id.ok_or(GameError::NoActiveRound)?;
+        if inner.round_submissions.get(&submission_id) != Some(&round_id) {
+            return Err(GameError::SubmissionNotInRound);
+        }
+        let key = (round_id, team_id, device_id.clone());
+        let created_at = inner
+            .team_selection_votes
+            .get(&key)
+            .map_or(now, |vote| vote.created_at);
+        let vote = TeamSelectionVote {
+            round_id,
+            team_id,
+            device_id,
+            submission_id,
+            created_at,
+            updated_at: now,
+        };
+        inner.team_selection_votes.insert(key, vote.clone());
+        inner.lock_nominations(round_id, now);
+        inner.version = inner.version.saturating_add(1);
+        inner.updated_at = now;
+        Ok((vote, inner.view(now)))
+    }
+
+    pub fn record_public_vote(
+        &self,
+        team_id: TeamId,
+        choices: Vec<PublicVoteChoice>,
+    ) -> Result<(PublicVote, GameStateView), GameError> {
+        let mut inner = self.write_inner()?;
+        let now = Utc::now();
+        if inner.phase != GamePhase::PublicVoting {
+            return Err(GameError::InvalidPhase);
+        }
+        if inner.phase_ends_at.is_some_and(|deadline| now > deadline) {
+            return Err(GameError::DeadlinePassed);
+        }
+        let round_id = inner.current_round_id.ok_or(GameError::NoActiveRound)?;
+        let max_votes = usize::from(inner.public_votes_per_team);
+        if choices.is_empty() || choices.len() > max_votes {
+            return Err(GameError::InvalidPublicVote);
+        }
+        let mut seen_teams = HashSet::new();
+        let mut seen_submissions = HashSet::new();
+        for choice in &choices {
+            if choice.target_team_id == team_id
+                || !seen_teams.insert(choice.target_team_id)
+                || !seen_submissions.insert(choice.target_submission_id)
+            {
+                return Err(GameError::InvalidPublicVote);
+            }
+            let nomination = inner
+                .nominations
+                .get(&(round_id, choice.target_team_id))
+                .ok_or(GameError::NominationNotFound)?;
+            if nomination.submission_id != choice.target_submission_id {
+                return Err(GameError::InvalidPublicVote);
+            }
+        }
+        let created_at = inner
+            .public_votes
+            .get(&(round_id, team_id))
+            .map_or(now, |vote| vote.created_at);
+        let vote = PublicVote {
+            round_id,
+            voter_team_id: team_id,
+            choices,
+            created_at,
+            updated_at: now,
+        };
+        inner.public_votes.insert((round_id, team_id), vote.clone());
+        inner.version = inner.version.saturating_add(1);
+        inner.updated_at = now;
+        Ok((vote, inner.view(now)))
+    }
+
+    pub fn score_current_round(
+        &self,
+        repository: &dyn Repository,
+        created_by: Option<String>,
+    ) -> Result<(Vec<RoundResultEntry>, GameStateView), GameError> {
+        let mut inner = self.write_inner()?;
+        let now = Utc::now();
+        let round_id = inner.current_round_id.ok_or(GameError::NoActiveRound)?;
+        inner.lock_nominations(round_id, now);
+        let mut counts: HashMap<TeamId, usize> = HashMap::new();
+        for vote in inner
+            .public_votes
+            .values()
+            .filter(|vote| vote.round_id == round_id)
+        {
+            for choice in &vote.choices {
+                *counts.entry(choice.target_team_id).or_default() += 1;
+            }
+        }
+        let mut nominations = inner.nominations_for_round(round_id);
+        nominations.sort_by(|left, right| {
+            counts
+                .get(&right.team_id)
+                .unwrap_or(&0)
+                .cmp(counts.get(&left.team_id).unwrap_or(&0))
+                .then(left.selected_at.cmp(&right.selected_at))
+        });
+        let placement = [100, 70, 50];
+        let mut results = Vec::new();
+        let mut inputs = Vec::new();
+        for (index, nomination) in nominations.into_iter().enumerate() {
+            let vote_count = *counts.get(&nomination.team_id).unwrap_or(&0);
+            let placement_points = placement.get(index).copied().unwrap_or(0);
+            let in_top_three = index < 3;
+            let streak = if in_top_three {
+                inner
+                    .top_three_streaks
+                    .get(&nomination.team_id)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_add(1)
+            } else {
+                0
+            };
+            inner.top_three_streaks.insert(nomination.team_id, streak);
+            let streak_bonus = if in_top_three {
+                i32::try_from(streak.saturating_sub(1))
+                    .unwrap_or(i32::MAX)
+                    .saturating_mul(10)
+                    .min(50)
+            } else {
+                0
+            };
+            if placement_points > 0 {
+                inputs.push(ScoreEventInput {
+                    team_id: nomination.team_id,
+                    event_type: ScoreEventType::RoundPlacement,
+                    delta: placement_points,
+                    score_after: None,
+                    refs: ScoreEventRefs {
+                        challenge_id: inner.current_challenge_id,
+                        submission_id: Some(nomination.submission_id),
+                    },
+                    reason: Some(format!("round placement #{}", index + 1)),
+                    created_by: created_by.clone(),
+                });
+            }
+            if streak_bonus > 0 {
+                inputs.push(ScoreEventInput {
+                    team_id: nomination.team_id,
+                    event_type: ScoreEventType::RoundStreakBonus,
+                    delta: streak_bonus,
+                    score_after: None,
+                    refs: ScoreEventRefs {
+                        challenge_id: inner.current_challenge_id,
+                        submission_id: Some(nomination.submission_id),
+                    },
+                    reason: Some(format!("top-three streak x{streak}")),
+                    created_by: created_by.clone(),
+                });
+            }
+            results.push(RoundResultEntry {
+                rank: index + 1,
+                team_id: nomination.team_id,
+                submission_id: nomination.submission_id,
+                vote_count,
+                placement_points,
+                streak,
+                streak_bonus,
+            });
+        }
+        repository
+            .append_score_events_bulk(inputs)
+            .map_err(|_| GameError::InvalidPublicVote)?;
+        inner.results.insert(round_id, results.clone());
+        inner.phase = GamePhase::RoundComplete;
+        inner.phase_started_at = now;
+        inner.phase_ends_at = None;
+        if let Some(round) = inner.rounds.get_mut(&round_id) {
+            round.completed_at = Some(now);
+        }
+        inner.version = inner.version.saturating_add(1);
+        inner.updated_at = now;
+        inner.updated_by = created_by;
+        Ok((results, inner.view(now)))
+    }
+
+    fn read_inner(&self) -> Result<std::sync::RwLockReadGuard<'_, GameInner>, GameError> {
+        self.inner.read().map_err(|_| GameError::LockUnavailable)
+    }
+    fn write_inner(&self) -> Result<std::sync::RwLockWriteGuard<'_, GameInner>, GameError> {
+        self.inner.write().map_err(|_| GameError::LockUnavailable)
+    }
+}
+
+#[derive(Debug)]
+struct GameInner {
+    version: i64,
+    phase: GamePhase,
+    current_round_id: Option<RoundId>,
+    current_challenge_id: Option<ChallengeId>,
+    phase_started_at: DateTime<Utc>,
+    phase_ends_at: Option<DateTime<Utc>>,
+    public_votes_per_team: u8,
+    team_selection_seconds: i64,
+    updated_at: DateTime<Utc>,
+    updated_by: Option<String>,
+    rounds: HashMap<RoundId, Round>,
+    round_submissions: HashMap<SubmissionId, RoundId>,
+    team_selection_votes: HashMap<(RoundId, TeamId, String), TeamSelectionVote>,
+    nominations: HashMap<(RoundId, TeamId), TeamNomination>,
+    public_votes: HashMap<(RoundId, TeamId), PublicVote>,
+    results: HashMap<RoundId, Vec<RoundResultEntry>>,
+    top_three_streaks: HashMap<TeamId, u32>,
+}
+
+impl Default for GameInner {
+    fn default() -> Self {
+        let now = Utc::now();
+        Self {
+            version: 0,
+            phase: GamePhase::Idle,
+            current_round_id: None,
+            current_challenge_id: None,
+            phase_started_at: now,
+            phase_ends_at: None,
+            public_votes_per_team: 3,
+            team_selection_seconds: 60,
+            updated_at: now,
+            updated_by: None,
+            rounds: HashMap::new(),
+            round_submissions: HashMap::new(),
+            team_selection_votes: HashMap::new(),
+            nominations: HashMap::new(),
+            public_votes: HashMap::new(),
+            results: HashMap::new(),
+            top_three_streaks: HashMap::new(),
+        }
+    }
+}
+
+impl GameInner {
+    fn view(&self, server_now: DateTime<Utc>) -> GameStateView {
+        GameStateView {
+            version: self.version,
+            phase: self.phase,
+            current_round_id: self.current_round_id,
+            current_challenge_id: self.current_challenge_id,
+            phase_started_at: self.phase_started_at,
+            phase_ends_at: self.phase_ends_at,
+            public_votes_per_team: self.public_votes_per_team,
+            team_selection_seconds: self.team_selection_seconds,
+            updated_at: self.updated_at,
+            updated_by: self.updated_by.clone(),
+            server_now,
+        }
+    }
+
+    fn current_round(&self) -> Option<Round> {
+        self.current_round_id
+            .and_then(|round_id| self.rounds.get(&round_id).cloned())
+    }
+
+    fn nominations_for_round(&self, round_id: RoundId) -> Vec<TeamNomination> {
+        let mut nominations: Vec<_> = self
+            .nominations
+            .values()
+            .filter(|nomination| nomination.round_id == round_id)
+            .cloned()
+            .collect();
+        nominations.sort_by(|left, right| left.team_id.cmp(&right.team_id));
+        nominations
+    }
+
+    fn lock_nominations(&mut self, round_id: RoundId, now: DateTime<Utc>) {
+        let mut by_team: HashMap<TeamId, HashMap<SubmissionId, usize>> = HashMap::new();
+        for vote in self
+            .team_selection_votes
+            .values()
+            .filter(|vote| vote.round_id == round_id)
+        {
+            *by_team
+                .entry(vote.team_id)
+                .or_default()
+                .entry(vote.submission_id)
+                .or_default() += 1;
+        }
+        for (&submission_id, &stored_round_id) in &self.round_submissions {
+            if stored_round_id == round_id {
+                // Submissions with no votes are not nominated until a vote exists; explicit voting is required.
+                let _ = submission_id;
+            }
+        }
+        for (team_id, counts) in by_team {
+            let Some((submission_id, vote_count)) = counts
+                .into_iter()
+                .max_by(|left, right| left.1.cmp(&right.1).then(right.0.cmp(&left.0)))
+            else {
+                continue;
+            };
+            self.nominations.insert(
+                (round_id, team_id),
+                TeamNomination {
+                    round_id,
+                    team_id,
+                    submission_id,
+                    vote_count,
+                    selected_at: now,
+                },
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -681,7 +1269,10 @@ impl Repository for InMemoryDatabase {
         InMemoryDatabase::pop_next_queued_submission(self)
     }
 
-    fn mark_submission_running(&self, submission_id: SubmissionId) -> Result<Submission, StoreError> {
+    fn mark_submission_running(
+        &self,
+        submission_id: SubmissionId,
+    ) -> Result<Submission, StoreError> {
         InMemoryDatabase::mark_submission_running(self, submission_id)
     }
 
@@ -701,7 +1292,10 @@ impl Repository for InMemoryDatabase {
         InMemoryDatabase::mark_submission_failed(self, submission_id, error_message)
     }
 
-    fn get_submission(&self, submission_id: SubmissionId) -> Result<Option<Submission>, StoreError> {
+    fn get_submission(
+        &self,
+        submission_id: SubmissionId,
+    ) -> Result<Option<Submission>, StoreError> {
         InMemoryDatabase::get_submission(self, submission_id)
     }
 
@@ -2046,6 +2640,116 @@ mod tests {
             .expect("store should read")
             .expect("team should exist");
         assert_eq!(team.total_score, 3);
+    }
+
+    #[test]
+    fn game_store_starts_round_records_votes_and_scores() {
+        let store = InMemoryDatabase::default();
+        let game = GameStore::default();
+        let (team, challenge) = team_and_challenge(&store);
+        let second_team = store
+            .create_team("second", "second", None)
+            .expect("second team should create");
+
+        let view = game
+            .start_round(
+                &store,
+                StartRoundInput {
+                    challenge_id: challenge.id,
+                    submission_seconds: 60,
+                    public_votes_per_team: 3,
+                    created_by: Some("admin".to_owned()),
+                },
+            )
+            .expect("round should start");
+        assert_eq!(view.phase, GamePhase::SubmissionOpen);
+
+        let submission = store
+            .create_submission(team.id, challenge.id, json!({ "team": 1 }), None)
+            .expect("submission should create");
+        game.attach_submission(&submission)
+            .expect("submission should attach to round");
+        let second_submission = store
+            .create_submission(second_team.id, challenge.id, json!({ "team": 2 }), None)
+            .expect("second submission should create");
+        game.attach_submission(&second_submission)
+            .expect("second submission should attach");
+
+        game.set_phase(GamePhase::TeamSelection, Some("admin".to_owned()))
+            .expect("phase should update");
+        game.record_team_selection_vote(&store, team.id, "device-1".to_owned(), submission.id)
+            .expect("team vote should record");
+        game.record_team_selection_vote(
+            &store,
+            second_team.id,
+            "device-2".to_owned(),
+            second_submission.id,
+        )
+        .expect("second team vote should record");
+
+        game.set_phase(GamePhase::PublicVoting, Some("admin".to_owned()))
+            .expect("public voting should start");
+        game.record_public_vote(
+            second_team.id,
+            vec![PublicVoteChoice {
+                target_team_id: team.id,
+                target_submission_id: submission.id,
+                rank: 1,
+            }],
+        )
+        .expect("public vote should record");
+
+        let (results, view) = game
+            .score_current_round(&store, Some("admin".to_owned()))
+            .expect("round should score");
+        assert_eq!(view.phase, GamePhase::RoundComplete);
+        assert_eq!(results[0].team_id, team.id);
+        assert_eq!(results[0].placement_points, 100);
+        let scored_team = store
+            .get_team(team.id)
+            .expect("store should read")
+            .expect("team should exist");
+        assert_eq!(scored_team.total_score, 100);
+    }
+
+    #[test]
+    fn game_store_rejects_public_vote_for_self_or_non_nomination() {
+        let store = InMemoryDatabase::default();
+        let game = GameStore::default();
+        let (team, challenge) = team_and_challenge(&store);
+        game.start_round(
+            &store,
+            StartRoundInput {
+                challenge_id: challenge.id,
+                submission_seconds: 60,
+                public_votes_per_team: 3,
+                created_by: None,
+            },
+        )
+        .expect("round should start");
+        let submission = store
+            .create_submission(team.id, challenge.id, json!({}), None)
+            .expect("submission should create");
+        game.attach_submission(&submission)
+            .expect("submission should attach");
+        game.set_phase(GamePhase::TeamSelection, None)
+            .expect("team selection should start");
+        game.record_team_selection_vote(&store, team.id, "device".to_owned(), submission.id)
+            .expect("team vote should record");
+        game.set_phase(GamePhase::PublicVoting, None)
+            .expect("public voting should start");
+
+        let error = game
+            .record_public_vote(
+                team.id,
+                vec![PublicVoteChoice {
+                    target_team_id: team.id,
+                    target_submission_id: submission.id,
+                    rank: 1,
+                }],
+            )
+            .expect_err("self vote should fail");
+        assert_eq!(error, GameError::InvalidPublicVote);
     }
 
     #[test]
