@@ -1,4 +1,4 @@
-use std::{collections::HashSet, convert::Infallible};
+use std::{collections::HashSet, convert::Infallible, time::Duration as StdDuration};
 
 use axum::{
     Json, Router,
@@ -153,6 +153,7 @@ async fn start_round(
         )
         .map_err(game_error)?;
     publish_game(&state, view.version);
+    schedule_phase_auto_advance(&state, &view);
     let snapshot = state
         .game
         .snapshot(state.repository.as_ref(), None)
@@ -185,6 +186,7 @@ async fn update_timer(
         .update_timer(phase_ends_at, Some(user.subject))
         .map_err(game_error)?;
     publish_game(&state, view.version);
+    schedule_phase_auto_advance(&state, &view);
     Ok(Json(
         state
             .game
@@ -209,6 +211,7 @@ async fn set_phase(
         .set_phase(payload.phase, Some(user.subject))
         .map_err(game_error)?;
     publish_game(&state, view.version);
+    schedule_phase_auto_advance(&state, &view);
     Ok(Json(
         state
             .game
@@ -363,6 +366,46 @@ fn publish_game(state: &AppState, version: i64) {
     state
         .event_bus
         .publish(AppEvent::GameStateChanged { version });
+}
+
+fn schedule_phase_auto_advance(state: &AppState, view: &GameStateView) {
+    let Some(deadline) = view.phase_ends_at else {
+        return;
+    };
+    if next_auto_phase(view.phase).is_none() {
+        return;
+    }
+    let expected_phase = view.phase;
+    let expected_round_id = view.current_round_id;
+    let delay = (deadline - Utc::now())
+        .to_std()
+        .unwrap_or(StdDuration::ZERO);
+    let state = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        match state
+            .game
+            .auto_advance_phase(expected_phase, expected_round_id, deadline)
+        {
+            Ok(Some(view)) => {
+                publish_game(&state, view.version);
+                schedule_phase_auto_advance(&state, &view);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, "failed to auto-advance game phase");
+            }
+        }
+    });
+}
+
+fn next_auto_phase(phase: GamePhase) -> Option<GamePhase> {
+    match phase {
+        GamePhase::SubmissionOpen => Some(GamePhase::TeamSelection),
+        GamePhase::TeamSelection => Some(GamePhase::PublicVoting),
+        GamePhase::PublicVoting => Some(GamePhase::RoundComplete),
+        GamePhase::Idle | GamePhase::Scoring | GamePhase::RoundComplete => None,
+    }
 }
 
 fn game_snapshot_event(state: &AppState, team_id: Option<TeamId>) -> Result<Event, AppError> {

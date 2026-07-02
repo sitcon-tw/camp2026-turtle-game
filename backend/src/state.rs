@@ -494,41 +494,35 @@ impl GameStore {
         updated_by: Option<String>,
     ) -> Result<GameStateView, GameError> {
         let mut inner = self.write_inner()?;
-        let round_id = inner.current_round_id.ok_or(GameError::NoActiveRound)?;
         let now = Utc::now();
-        if phase == GamePhase::TeamSelection {
-            inner.lock_nominations(round_id, now);
+        Self::apply_phase_change(&mut inner, phase, now, updated_by)
+    }
+
+    pub fn auto_advance_phase(
+        &self,
+        expected_phase: GamePhase,
+        expected_round_id: Option<RoundId>,
+        expected_deadline: DateTime<Utc>,
+    ) -> Result<Option<GameStateView>, GameError> {
+        let mut inner = self.write_inner()?;
+        let now = Utc::now();
+        if inner.phase != expected_phase
+            || inner.current_round_id != expected_round_id
+            || inner.phase_ends_at != Some(expected_deadline)
+            || now < expected_deadline
+        {
+            return Ok(None);
         }
-        if phase == GamePhase::PublicVoting {
-            inner.lock_nominations(round_id, now);
-        }
-        let ends_at = match phase {
-            GamePhase::TeamSelection => Some(now + Duration::seconds(inner.team_selection_seconds)),
-            GamePhase::SubmissionOpen => inner
-                .rounds
-                .get(&round_id)
-                .map(|round| round.submission_ends_at),
-            GamePhase::PublicVoting => Some(now + Duration::seconds(60)),
-            GamePhase::Scoring | GamePhase::RoundComplete | GamePhase::Idle => None,
+        let Some(next_phase) = next_auto_phase(expected_phase) else {
+            return Ok(None);
         };
-        if let Some(round) = inner.rounds.get_mut(&round_id) {
-            if phase == GamePhase::TeamSelection {
-                round.team_selection_ends_at = ends_at;
-            }
-            if phase == GamePhase::PublicVoting {
-                round.public_voting_ends_at = ends_at;
-            }
-            if phase == GamePhase::RoundComplete {
-                round.completed_at = Some(now);
-            }
-        }
-        inner.phase = phase;
-        inner.phase_started_at = now;
-        inner.phase_ends_at = ends_at;
-        inner.updated_at = now;
-        inner.updated_by = updated_by;
-        inner.version = inner.version.saturating_add(1);
-        Ok(inner.view(now))
+        Self::apply_phase_change(
+            &mut inner,
+            next_phase,
+            now,
+            Some("system:auto-advance".to_owned()),
+        )
+        .map(Some)
     }
 
     pub fn is_round_submission(&self, submission_id: SubmissionId) -> Result<bool, GameError> {
@@ -767,6 +761,57 @@ impl GameStore {
     }
     fn write_inner(&self) -> Result<std::sync::RwLockWriteGuard<'_, GameInner>, GameError> {
         self.inner.write().map_err(|_| GameError::LockUnavailable)
+    }
+
+    fn apply_phase_change(
+        inner: &mut GameInner,
+        phase: GamePhase,
+        now: DateTime<Utc>,
+        updated_by: Option<String>,
+    ) -> Result<GameStateView, GameError> {
+        let round_id = inner.current_round_id.ok_or(GameError::NoActiveRound)?;
+        if phase == GamePhase::TeamSelection {
+            inner.lock_nominations(round_id, now);
+        }
+        if phase == GamePhase::PublicVoting {
+            inner.lock_nominations(round_id, now);
+        }
+        let ends_at = match phase {
+            GamePhase::TeamSelection => Some(now + Duration::seconds(inner.team_selection_seconds)),
+            GamePhase::SubmissionOpen => inner
+                .rounds
+                .get(&round_id)
+                .map(|round| round.submission_ends_at),
+            GamePhase::PublicVoting => Some(now + Duration::seconds(60)),
+            GamePhase::Scoring | GamePhase::RoundComplete | GamePhase::Idle => None,
+        };
+        if let Some(round) = inner.rounds.get_mut(&round_id) {
+            if phase == GamePhase::TeamSelection {
+                round.team_selection_ends_at = ends_at;
+            }
+            if phase == GamePhase::PublicVoting {
+                round.public_voting_ends_at = ends_at;
+            }
+            if phase == GamePhase::RoundComplete {
+                round.completed_at = Some(now);
+            }
+        }
+        inner.phase = phase;
+        inner.phase_started_at = now;
+        inner.phase_ends_at = ends_at;
+        inner.updated_at = now;
+        inner.updated_by = updated_by;
+        inner.version = inner.version.saturating_add(1);
+        Ok(inner.view(now))
+    }
+}
+
+fn next_auto_phase(phase: GamePhase) -> Option<GamePhase> {
+    match phase {
+        GamePhase::SubmissionOpen => Some(GamePhase::TeamSelection),
+        GamePhase::TeamSelection => Some(GamePhase::PublicVoting),
+        GamePhase::PublicVoting => Some(GamePhase::RoundComplete),
+        GamePhase::Idle | GamePhase::Scoring | GamePhase::RoundComplete => None,
     }
 }
 
@@ -2814,6 +2859,41 @@ mod tests {
             )
             .expect_err("self vote should fail");
         assert_eq!(error, GameError::InvalidPublicVote);
+    }
+
+    #[test]
+    fn game_store_auto_advances_only_matching_expired_phase() {
+        let store = InMemoryDatabase::default();
+        let game = GameStore::default();
+        let (_team, challenge) = team_and_challenge(&store);
+        let view = game
+            .start_round(
+                &store,
+                StartRoundInput {
+                    challenge_id: challenge.id,
+                    submission_seconds: 60,
+                    public_votes_per_team: 3,
+                    created_by: None,
+                },
+            )
+            .expect("round should start");
+        let old_deadline = view.phase_ends_at.expect("round has deadline");
+        let round_id = view.current_round_id;
+        let expired_deadline = Utc::now() - Duration::seconds(1);
+        game.update_timer(expired_deadline, None)
+            .expect("timer should update");
+
+        let stale = game
+            .auto_advance_phase(GamePhase::SubmissionOpen, round_id, old_deadline)
+            .expect("stale auto advance should not fail");
+        assert!(stale.is_none());
+
+        let advanced = game
+            .auto_advance_phase(GamePhase::SubmissionOpen, round_id, expired_deadline)
+            .expect("expired phase should advance")
+            .expect("phase should advance");
+        assert_eq!(advanced.phase, GamePhase::TeamSelection);
+        assert_eq!(advanced.updated_by.as_deref(), Some("system:auto-advance"));
     }
 
     #[test]
