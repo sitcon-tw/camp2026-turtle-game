@@ -154,6 +154,46 @@ async fn admin_controls_full_round_and_teams_vote_to_score() {
 }
 
 #[tokio::test]
+async fn backend_auto_advances_phase_when_deadline_passes() {
+    let fixture = Fixture::new();
+    let app = router(fixture.state.clone());
+
+    let start = json_request(
+        app.clone(),
+        Method::POST,
+        "/api/v1/admin/game/rounds",
+        Some(&fixture.admin_token),
+        json!({
+            "challenge_id": fixture.challenge.id,
+            "submission_seconds": 120,
+            "public_votes_per_team": 3
+        }),
+    )
+    .await;
+    assert_eq!(start.status(), StatusCode::CREATED);
+
+    let expired_deadline = chrono::Utc::now() - chrono::Duration::seconds(1);
+    let timer = json_request(
+        app.clone(),
+        Method::PATCH,
+        "/api/v1/admin/game/timer",
+        Some(&fixture.admin_token),
+        json!({ "phase_ends_at": expired_deadline }),
+    )
+    .await;
+    assert_eq!(timer.status(), StatusCode::OK);
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let state = get_request(app, "/api/v1/game/state", Some(&fixture.admin_token)).await;
+    assert_eq!(state.status(), StatusCode::OK);
+    let body = response_json(state).await;
+    assert_eq!(body["state"]["phase"], "team_selection");
+    assert_eq!(body["state"]["updated_by"], "system:auto-advance");
+    assert!(body["state"]["phase_ends_at"].is_string());
+}
+
+#[tokio::test]
 async fn game_rejects_actions_outside_their_phase_and_invalid_public_votes() {
     let fixture = Fixture::new();
     let app = router(fixture.state.clone());
