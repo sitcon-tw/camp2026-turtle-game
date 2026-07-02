@@ -64,7 +64,6 @@ async fn blackboard_events_stream_immediate_judge_steps() {
             target_image_path: None,
             target_image_url: None,
             points: 10,
-            pass_threshold: 1.0,
             enabled: true,
             order: 1,
             canvas: CanvasConfig::default(),
@@ -112,8 +111,7 @@ async fn blackboard_events_stream_immediate_judge_steps() {
             continue;
         }
 
-        if event_type == "judging_step"
-        {
+        if event_type == "judging_step" {
             step_count += 1;
             first_step_playback_ms.push(
                 event["playback_ms"]

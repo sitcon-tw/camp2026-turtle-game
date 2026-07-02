@@ -280,7 +280,6 @@ impl Fixture {
                 target_image_path: None,
                 target_image_url: None,
                 points: 100,
-                pass_threshold: 0.9,
                 enabled: true,
                 order: 1,
                 canvas: CanvasConfig::default(),

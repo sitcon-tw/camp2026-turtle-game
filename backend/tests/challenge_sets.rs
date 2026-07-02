@@ -51,7 +51,6 @@ async fn team_challenge_list_uses_active_enabled_challenges_and_progress() {
             target_image_path: None,
             target_image_url: None,
             points: 100,
-            pass_threshold: 0.9,
             enabled: true,
             order: 1,
             canvas: CanvasConfig::default(),
@@ -69,7 +68,6 @@ async fn team_challenge_list_uses_active_enabled_challenges_and_progress() {
             target_image_path: None,
             target_image_url: None,
             points: 50,
-            pass_threshold: 0.8,
             enabled: false,
             order: 2,
             canvas: CanvasConfig::default(),
@@ -86,10 +84,6 @@ async fn team_challenge_list_uses_active_enabled_challenges_and_progress() {
             submission.id,
             CompletedSubmission {
                 trace: None,
-                similarity: Some(0.82),
-                passed: false,
-                judge_score: Some(0.82),
-                awarded_points: 0,
                 result_image_asset_id: None,
                 result_image_path: None,
                 result_image_url: None,
@@ -114,7 +108,6 @@ async fn team_challenge_list_uses_active_enabled_challenges_and_progress() {
     assert_eq!(challenges[0]["id"], enabled.id.as_uuid().to_string());
     assert_eq!(challenges[0]["status"], "attempted");
     assert_eq!(challenges[0]["submission_count"], 1);
-    assert_eq!(challenges[0]["best_similarity"], 0.82);
 
     let response = request(
         app,
@@ -315,7 +308,6 @@ async fn admin_can_create_challenge_set_challenge_upload_image_and_export_zip() 
             "title": "Manual Line",
             "description": "Created through JSON API",
             "points": 75,
-            "pass_threshold": 0.5,
             "enabled": true,
             "order": 3,
             "canvas": {
@@ -345,8 +337,7 @@ async fn admin_can_create_challenge_set_challenge_upload_image_and_export_zip() 
         json!({
             "slug": "manual-line",
             "title": "Duplicate",
-            "points": 75,
-            "pass_threshold": 0.5
+            "points": 75
         }),
     )
     .await;
@@ -523,7 +514,6 @@ fn challenge_manifest(slug: &str, image_path: &str, order: i32) -> Value {
         "description": "Draw the target",
         "target_image_path": image_path,
         "points": 100,
-        "pass_threshold": 0.9,
         "enabled": true,
         "order": order,
         "canvas": {

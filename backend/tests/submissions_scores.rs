@@ -57,8 +57,6 @@ async fn submit_rejects_invalid_program_and_immediately_completes_submission() {
     let first_body = response_json(first_response).await;
     assert!(first_body.get("position").is_none());
     assert_eq!(first_body["submission"]["status"], "completed");
-    assert_eq!(first_body["submission"]["passed"], true);
-    assert_eq!(first_body["submission"]["awarded_points"], 0);
     assert!(first_body["submission"]["result_image_url"].is_string());
 
     let list_response = app
@@ -103,8 +101,6 @@ async fn submit_completion_does_not_award_points_or_change_leaderboard() {
     assert_eq!(first_response.status(), StatusCode::CREATED);
     let first_body = response_json(first_response).await;
     assert_eq!(first_body["submission"]["status"], "completed");
-    assert_eq!(first_body["submission"]["passed"], true);
-    assert_eq!(first_body["submission"]["awarded_points"], 0);
 
     tokio::time::sleep(Duration::from_secs(3)).await;
 
@@ -127,8 +123,6 @@ async fn submit_completion_does_not_award_points_or_change_leaderboard() {
     assert_eq!(second_response.status(), StatusCode::CREATED);
     let second_body = response_json(second_response).await;
     assert_eq!(second_body["submission"]["status"], "completed");
-    assert_eq!(second_body["submission"]["passed"], true);
-    assert_eq!(second_body["submission"]["awarded_points"], 0);
 
     let team = fixture
         .state
@@ -150,12 +144,12 @@ async fn submit_completion_does_not_award_points_or_change_leaderboard() {
         leaderboard_body["teams"][0]["team_id"],
         fixture.team.id.as_uuid().to_string()
     );
-    assert_eq!(
-        leaderboard_body["teams"][0]["total_score"],
-        0
-    );
+    assert_eq!(leaderboard_body["teams"][0]["total_score"], 0);
     assert_eq!(leaderboard_body["teams"][0]["solved_count"], 0);
-    assert_eq!(leaderboard_body["teams"][0]["last_score_event_at"], Value::Null);
+    assert_eq!(
+        leaderboard_body["teams"][0]["last_score_event_at"],
+        Value::Null
+    );
 
     let asset_response = app
         .oneshot(
@@ -193,7 +187,6 @@ async fn submit_rejects_challenges_outside_active_set() {
             target_image_path: None,
             target_image_url: None,
             points: 50,
-            pass_threshold: 1.0,
             enabled: true,
             order: 1,
             canvas: CanvasConfig::default(),
@@ -217,7 +210,6 @@ async fn submit_rejects_challenges_outside_active_set() {
             target_image_path: None,
             target_image_url: None,
             points: 50,
-            pass_threshold: 1.0,
             enabled: true,
             order: 1,
             canvas: CanvasConfig::default(),
@@ -458,7 +450,6 @@ impl Fixture {
                 target_image_path: None,
                 target_image_url: None,
                 points: 50,
-                pass_threshold: 1.0,
                 enabled: true,
                 order: 1,
                 canvas: CanvasConfig::default(),

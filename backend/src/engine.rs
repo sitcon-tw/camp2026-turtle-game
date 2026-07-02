@@ -1,6 +1,6 @@
 use std::{io::Cursor, time::Instant};
 
-use image::{DynamicImage, ImageError, ImageFormat, Rgba, RgbaImage, imageops::FilterType};
+use image::{DynamicImage, ImageError, ImageFormat, Rgba, RgbaImage};
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -718,54 +718,6 @@ pub fn render_program_image(program: &BlockProgram) -> Result<RgbaImage, EngineE
     let mut state = program.start;
     execute_blocks_for_render(&program.blocks, &mut state, &mut image, started_at)?;
     Ok(image)
-}
-
-/// Compares two PNG images and returns a score from `0.0` to `1.0`.
-///
-/// Empty byte slices produce `0.0`; invalid non-empty image data is returned as
-/// an image decoding error.
-///
-/// # Errors
-///
-/// Returns an image error for malformed non-empty image bytes.
-pub fn pixel_similarity_png_bytes(target: &[u8], result: &[u8]) -> Result<f64, EngineError> {
-    if target.is_empty() || result.is_empty() {
-        return Ok(0.0);
-    }
-
-    let target = image::load_from_memory(target)?.into_rgba8();
-    let result = image::load_from_memory(result)?.into_rgba8();
-    Ok(pixel_similarity_images(&target, &result))
-}
-
-#[must_use]
-pub fn pixel_similarity_images(target: &RgbaImage, result: &RgbaImage) -> f64 {
-    let width = target.width();
-    let height = target.height();
-    if width == 0 || height == 0 || result.width() == 0 || result.height() == 0 {
-        return 0.0;
-    }
-
-    let normalized_result = if result.width() == width && result.height() == height {
-        result.clone()
-    } else {
-        image::imageops::resize(result, width, height, FilterType::Nearest)
-    };
-
-    let max_diff = f64::from(width) * f64::from(height) * 4.0 * 255.0;
-    let total_diff = target
-        .pixels()
-        .zip(normalized_result.pixels())
-        .map(|(left, right)| {
-            left.0
-                .iter()
-                .zip(right.0.iter())
-                .map(|(a, b)| (f64::from(*a) - f64::from(*b)).abs())
-                .sum::<f64>()
-        })
-        .sum::<f64>();
-
-    (1.0 - total_diff / max_diff).clamp(0.0, 1.0)
 }
 
 fn execute_blocks_for_trace(
@@ -1503,25 +1455,6 @@ mod tests {
         let second_png = render_program_png(&drawing)?;
         assert_eq!(first_png, second_png);
         assert!(first_png.starts_with(b"\x89PNG\r\n\x1a\n"));
-
-        Ok(())
-    }
-
-    #[test]
-    fn similarity_scores_identical_different_resized_and_empty() -> Result<(), EngineError> {
-        let white = RgbaImage::from_pixel(4, 4, DEFAULT_BACKGROUND);
-        let mut black = RgbaImage::from_pixel(4, 4, Rgba([0, 0, 0, 255]));
-        assert!((pixel_similarity_images(&white, &white) - 1.0).abs() < f64::EPSILON);
-        assert!(pixel_similarity_images(&white, &black) < 0.4);
-
-        let resized = RgbaImage::from_pixel(2, 2, DEFAULT_BACKGROUND);
-        assert!((pixel_similarity_images(&white, &resized) - 1.0).abs() < f64::EPSILON);
-
-        black.put_pixel(0, 0, DEFAULT_BACKGROUND);
-        let white_png = encode_png(&white)?;
-        let black_png = encode_png(&black)?;
-        assert!(pixel_similarity_png_bytes(&white_png, &black_png)? < 1.0);
-        assert_eq!(pixel_similarity_png_bytes(&[], &white_png)?, 0.0);
 
         Ok(())
     }

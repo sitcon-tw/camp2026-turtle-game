@@ -18,14 +18,10 @@ use uuid::Uuid;
 
 use crate::{
     auth::AuthenticatedUser,
-    engine::{
-        BlockProgram, EngineError, interpret_program, pixel_similarity_png_bytes,
-        render_program_png,
-    },
+    engine::{BlockProgram, EngineError, interpret_program, render_program_png},
     error::AppError,
     models::{
-        Challenge, ChallengeId, Role, ScoreEvent, ScoreEventType, Submission, SubmissionId,
-        TeamId, Timestamp,
+        ChallengeId, Role, ScoreEvent, ScoreEventType, Submission, SubmissionId, TeamId, Timestamp,
     },
     state::{
         AppEvent, AppState, CompletedSubmission, RateLimitStatus, ScoreEventListFilter,
@@ -352,34 +348,22 @@ async fn judge_submission(
     state: &AppState,
     submission: &Submission,
 ) -> Result<CompletedSubmission, String> {
-    let challenge = state
-        .repository
-        .get_challenge(submission.challenge_id)
-        .map_err(public_store_error)?
-        .ok_or_else(|| "challenge was not found".to_owned())?;
     let program: BlockProgram = serde_json::from_value(submission.block_program.clone())
         .map_err(|error| format_engine_error(EngineError::InvalidJson(error)))?;
     program.validate().map_err(format_engine_error)?;
     let trace = interpret_program(&program).map_err(format_engine_error)?;
     play_trace_for_blackboard(state, submission, &program, &trace).await;
     let png = render_program_png(&program).map_err(format_engine_error)?;
-    let similarity = similarity_for_challenge(state, &challenge, &png).map_err(public_app_error)?;
-    let passed = similarity >= challenge.pass_threshold;
     let asset_id = format!("results/{}.png", submission.id.as_uuid());
     let result_url = format!("/api/v1/assets/results/{}.png", submission.id.as_uuid());
     state
         .asset_storage
         .put_asset(asset_id.clone(), RESULT_CONTENT_TYPE, png)
         .map_err(public_store_error)?;
-    let awarded_points = 0;
     let trace = serde_json::to_value(trace).map_err(|error| error.to_string())?;
 
     Ok(CompletedSubmission {
         trace: Some(trace),
-        similarity: Some(similarity),
-        passed,
-        judge_score: Some(similarity),
-        awarded_points,
         result_image_asset_id: Some(asset_id),
         result_image_path: None,
         result_image_url: Some(result_url),
@@ -418,20 +402,6 @@ async fn play_trace_for_blackboard(
         team_id: submission.team_id,
         challenge_id: submission.challenge_id,
     });
-}
-
-fn similarity_for_challenge(
-    state: &AppState,
-    challenge: &Challenge,
-    result_png: &[u8],
-) -> Result<f64, AppError> {
-    let Some(asset_id) = &challenge.target_image_asset_id else {
-        return Ok(1.0);
-    };
-    let Some(asset) = state.asset_storage.get_asset(asset_id)? else {
-        return Ok(1.0);
-    };
-    pixel_similarity_png_bytes(&asset.bytes, result_png).map_err(engine_app_error)
 }
 
 fn validated_program_value(value: Value) -> Result<Value, AppError> {
@@ -524,8 +494,4 @@ fn format_engine_error(error: EngineError) -> String {
 
 fn public_store_error(error: crate::state::StoreError) -> String {
     error.to_string()
-}
-
-fn public_app_error(error: AppError) -> String {
-    format!("{error:?}")
 }

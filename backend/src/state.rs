@@ -903,7 +903,9 @@ impl GameInner {
             .round_submissions
             .iter()
             .filter(|(_, stored_round_id)| **stored_round_id == round_id)
-            .filter_map(|(submission_id, _)| repository.get_submission(*submission_id).ok().flatten())
+            .filter_map(|(submission_id, _)| {
+                repository.get_submission(*submission_id).ok().flatten()
+            })
             .collect();
         submissions.sort_by(|left, right| {
             left.created_at
@@ -929,11 +931,13 @@ impl GameInner {
         }
         let mut counts: Vec<_> = counts
             .into_iter()
-            .map(|((target_team_id, target_submission_id), vote_count)| PublicVoteCount {
-                target_team_id,
-                target_submission_id,
-                vote_count,
-            })
+            .map(
+                |((target_team_id, target_submission_id), vote_count)| PublicVoteCount {
+                    target_team_id,
+                    target_submission_id,
+                    vote_count,
+                },
+            )
             .collect();
         counts.sort_by(|left, right| {
             right
@@ -1037,7 +1041,6 @@ pub struct NewChallenge {
     pub target_image_path: Option<String>,
     pub target_image_url: Option<String>,
     pub points: i32,
-    pub pass_threshold: f64,
     pub enabled: bool,
     pub order: i32,
     pub canvas: CanvasConfig,
@@ -1049,7 +1052,6 @@ pub struct ChallengeUpdate {
     pub title: Option<String>,
     pub description: Option<String>,
     pub points: Option<i32>,
-    pub pass_threshold: Option<f64>,
     pub enabled: Option<bool>,
     pub order: Option<i32>,
 }
@@ -1071,16 +1073,12 @@ pub struct ChallengeReorder {
 pub struct TeamChallengeProgress {
     pub status: ChallengeProgressStatus,
     pub submission_count: usize,
-    pub best_similarity: Option<f64>,
-    pub best_submission_id: Option<SubmissionId>,
-    pub awarded_points: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChallengeStats {
     pub submission_count: usize,
     pub solved_count: usize,
-    pub best_similarity: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1193,10 +1191,6 @@ pub struct TeamUpdate {
 #[derive(Debug, Clone)]
 pub struct CompletedSubmission {
     pub trace: Option<Value>,
-    pub similarity: Option<f64>,
-    pub passed: bool,
-    pub judge_score: Option<f64>,
-    pub awarded_points: i32,
     pub result_image_asset_id: Option<String>,
     pub result_image_path: Option<String>,
     pub result_image_url: Option<String>,
@@ -1698,7 +1692,6 @@ impl InMemoryDatabase {
             target_image_path: input.target_image_path,
             target_image_url: input.target_image_url,
             points: input.points,
-            pass_threshold: input.pass_threshold,
             enabled: input.enabled,
             order: input.order,
             canvas: input.canvas,
@@ -1763,9 +1756,6 @@ impl InMemoryDatabase {
         }
         if let Some(points) = update.points {
             challenge.points = points;
-        }
-        if let Some(pass_threshold) = update.pass_threshold {
-            challenge.pass_threshold = pass_threshold;
         }
         if let Some(enabled) = update.enabled {
             challenge.enabled = enabled;
@@ -1853,24 +1843,10 @@ impl InMemoryDatabase {
         }
 
         let mut submission_count = 0_usize;
-        let mut best_similarity = None;
-        let mut best_submission_id = None;
-        let mut awarded_points = None;
         for submission in inner.submissions.values().filter(|submission| {
             submission.team_id == team_id && submission.challenge_id == challenge_id
         }) {
             submission_count = submission_count.saturating_add(1);
-            if let Some(points) = submission.awarded_points {
-                awarded_points =
-                    Some(awarded_points.map_or(points, |current: i32| current.max(points)));
-            }
-            let Some(similarity) = submission.similarity else {
-                continue;
-            };
-            if best_similarity.is_none_or(|current| similarity > current) {
-                best_similarity = Some(similarity);
-                best_submission_id = Some(submission.id);
-            }
         }
 
         let solved = inner.score_events.iter().any(|event| {
@@ -1889,9 +1865,6 @@ impl InMemoryDatabase {
         Ok(TeamChallengeProgress {
             status,
             submission_count,
-            best_similarity,
-            best_submission_id,
-            awarded_points,
         })
     }
 
@@ -1908,12 +1881,6 @@ impl InMemoryDatabase {
             .values()
             .filter(|submission| submission.challenge_id == challenge_id)
             .count();
-        let best_similarity = inner
-            .submissions
-            .values()
-            .filter(|submission| submission.challenge_id == challenge_id)
-            .filter_map(|submission| submission.similarity)
-            .max_by(f64::total_cmp);
         let solved_count = inner
             .score_events
             .iter()
@@ -1928,7 +1895,6 @@ impl InMemoryDatabase {
         Ok(ChallengeStats {
             submission_count,
             solved_count,
-            best_similarity,
         })
     }
 
@@ -1970,10 +1936,6 @@ impl InMemoryDatabase {
             result_image_path: None,
             result_image_url: None,
             trace: None,
-            similarity: None,
-            passed: None,
-            judge_score: None,
-            awarded_points: None,
             error_message: None,
             retry_of,
             created_at: now,
@@ -2139,10 +2101,6 @@ impl InMemoryDatabase {
         let now = Utc::now();
         submission.status = SubmissionStatus::Completed;
         submission.trace = result.trace;
-        submission.similarity = result.similarity;
-        submission.passed = Some(result.passed);
-        submission.judge_score = result.judge_score;
-        submission.awarded_points = Some(result.awarded_points);
         submission.result_image_asset_id = result.result_image_asset_id;
         submission.result_image_path = result.result_image_path;
         submission.result_image_url = result.result_image_url;
@@ -2958,7 +2916,6 @@ mod tests {
                 target_image_path: None,
                 target_image_url: None,
                 points: 100,
-                pass_threshold: 0.9,
                 enabled: true,
                 order: 1,
                 canvas: CanvasConfig::default(),
