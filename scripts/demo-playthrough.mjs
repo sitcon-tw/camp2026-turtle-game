@@ -1,0 +1,331 @@
+#!/usr/bin/env node
+
+import { existsSync, readFileSync } from "node:fs"
+
+const envFile = readEnvFile("backend/.env")
+const API_ORIGIN = process.env.API_ORIGIN ?? "http://127.0.0.1:3000"
+const API_BASE = `${API_ORIGIN}/api/v1`
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? envFile.ADMIN_PASSWORD ?? "admin-password"
+const SUBMISSION_SECONDS = Number(process.env.SUBMISSION_SECONDS ?? 20)
+const TEAM_SELECTION_SECONDS = Number(process.env.TEAM_SELECTION_SECONDS ?? 14)
+const PUBLIC_VOTING_SECONDS = Number(process.env.PUBLIC_VOTING_SECONDS ?? 14)
+
+const runId = Date.now().toString(36).toUpperCase().slice(-6)
+const canvas = { width: 640, height: 480, background_color: "#ffffff" }
+const programCanvas = { width: canvas.width, height: canvas.height }
+const teamSeeds = [
+  { name: "Redwood", color: "#dc2626", accent: "#16a34a", start: [132, 132] },
+  { name: "Bluewave", color: "#2563eb", accent: "#0f766e", start: [166, 134] },
+  { name: "Solar", color: "#ca8a04", accent: "#7c3aed", start: [190, 150] },
+  { name: "Pixel", color: "#7c3aed", accent: "#0891b2", start: [146, 168] },
+  { name: "Jade", color: "#16a34a", accent: "#ca8a04", start: [178, 176] },
+  { name: "Orbit", color: "#0891b2", accent: "#dc2626", start: [212, 138] },
+]
+
+const submissionPlan = [
+  { team: 0, variant: 1, delayMs: 1_000 },
+  { team: 1, variant: 1, delayMs: 3_000 },
+  { team: 2, variant: 1, delayMs: 5_000 },
+  { team: 3, variant: 1, delayMs: 7_000 },
+  { team: 4, variant: 1, delayMs: 9_000 },
+  { team: 5, variant: 1, delayMs: 11_000 },
+  { team: 1, variant: 2, delayMs: 14_000 },
+  { team: 3, variant: 2, delayMs: 16_000 },
+  { team: 0, variant: 2, delayMs: 18_000 },
+]
+
+main().catch((error) => {
+  console.error(`\nDemo failed: ${error.message}`)
+  process.exitCode = 1
+})
+
+async function main() {
+  log(`Starting demo playthrough against ${API_ORIGIN}`)
+  await request("/healthz", { base: API_ORIGIN, auth: false })
+
+  const adminToken = await adminLogin()
+  await disablePriorDemoTeams(adminToken)
+  const challenge = await createDemoChallenge(adminToken)
+  const teams = await createTeams(adminToken)
+  const teamLogins = await Promise.all(teams.map((team) => teamLogin(team.login_code)))
+
+  await adminRequest(adminToken, "/admin/game/rounds", {
+    method: "POST",
+    body: {
+      challenge_id: challenge.id,
+      submission_seconds: SUBMISSION_SECONDS,
+      public_votes_per_team: 2,
+    },
+  })
+  log(`Round started: ${SUBMISSION_SECONDS}s submission window`)
+
+  const submissionsByTeam = new Map(teams.map((team) => [team.id, []]))
+  await runSubmissionPhase(teamLogins, submissionsByTeam)
+
+  const remainingSubmissionMs = Math.max(0, SUBMISSION_SECONDS * 1_000 + 1_000 - Math.max(...submissionPlan.map((item) => item.delayMs)))
+  if (remainingSubmissionMs > 0) {
+    log(`Waiting ${Math.round(remainingSubmissionMs / 1000)}s for the submission phase to finish`)
+    await sleep(remainingSubmissionMs)
+  }
+
+  await adminRequest(adminToken, "/admin/game/phase", { method: "POST", body: { phase: "team_selection" } })
+  await adminRequest(adminToken, "/admin/game/timer", { method: "PATCH", body: { add_seconds: TEAM_SELECTION_SECONDS } })
+  log(`Team Selection started: ${TEAM_SELECTION_SECONDS}s`)
+  await runTeamSelectionPhase(teamLogins, submissionsByTeam)
+  await sleep(2_500)
+
+  await adminRequest(adminToken, "/admin/game/phase", { method: "POST", body: { phase: "public_voting" } })
+  await adminRequest(adminToken, "/admin/game/timer", { method: "PATCH", body: { add_seconds: PUBLIC_VOTING_SECONDS } })
+  log(`Public Voting started: ${PUBLIC_VOTING_SECONDS}s`)
+  await runPublicVotingPhase(teamLogins, submissionsByTeam)
+  await sleep(4_000)
+
+  log("Scoring round")
+  await adminRequest(adminToken, "/admin/game/score", { method: "POST", body: {} })
+  log("Demo complete. The blackboard should now be in Round Complete.")
+}
+
+async function adminLogin() {
+  const response = await request("/admin/login", {
+    method: "POST",
+    auth: false,
+    body: { password: ADMIN_PASSWORD },
+  })
+  return response.access_token
+}
+
+async function createDemoChallenge(adminToken) {
+  const set = await adminRequest(adminToken, "/admin/challenge-sets", {
+    method: "POST",
+    body: {
+      name: `Blackboard Demo ${runId}`,
+      version: `demo-${runId}`,
+    },
+  })
+  const challenge = await adminRequest(adminToken, `/admin/challenge-sets/${set.id}/challenges`, {
+    method: "POST",
+    body: {
+      slug: `blackboard-demo-${runId.toLowerCase()}`,
+      title: `Blackboard Demo ${runId}`,
+      description: "Fast turtle drawing demo for the classroom blackboard.",
+      points: 100,
+      enabled: true,
+      order: 1,
+      canvas,
+      judge_config: {},
+    },
+  })
+  await adminRequest(adminToken, `/admin/challenge-sets/${set.id}/activate`, { method: "POST" })
+  log(`Challenge ready: ${challenge.title}`)
+  return challenge
+}
+
+async function createTeams(adminToken) {
+  const created = []
+  for (const [index, seed] of teamSeeds.entries()) {
+    const team = await adminRequest(adminToken, "/admin/teams", {
+      method: "POST",
+      body: {
+        name: `${seed.name} ${runId}`,
+        login_code: `D${runId}${index + 1}`,
+        note: "Generated by scripts/demo-playthrough.mjs",
+      },
+    })
+    created.push(team)
+  }
+  log(`Created ${created.length} demo teams`)
+  return created
+}
+
+async function disablePriorDemoTeams(adminToken) {
+  const teams = await adminRequest(adminToken, "/admin/teams")
+  const demoTeams = teams.filter((team) => team.enabled && team.note === "Generated by scripts/demo-playthrough.mjs")
+  if (demoTeams.length === 0) return
+
+  log(`Disabling ${demoTeams.length} prior demo teams`)
+  for (const team of demoTeams) {
+    await adminRequest(adminToken, `/admin/teams/${team.id}`, {
+      method: "PATCH",
+      body: { enabled: false },
+    })
+  }
+}
+
+async function teamLogin(code) {
+  const login = await request("/team/login", {
+    method: "POST",
+    auth: false,
+    body: { code },
+  })
+  return {
+    team: login.team,
+    token: login.access_token,
+  }
+}
+
+async function runSubmissionPhase(teamLogins, submissionsByTeam) {
+  const startedAt = Date.now()
+  for (const item of submissionPlan) {
+    const waitMs = Math.max(0, startedAt + item.delayMs - Date.now())
+    if (waitMs > 0) await sleep(waitMs)
+
+    const login = teamLogins[item.team]
+    const seed = teamSeeds[item.team]
+    const program = turtleProgram(seed, item.variant)
+    log(`${login.team.name} submits drawing ${item.variant}`)
+    const response = await teamRequest(login.token, "/game/rounds/current/submissions", {
+      method: "POST",
+      body: { block_program: program },
+    })
+    submissionsByTeam.get(login.team.id).push(response.submission)
+  }
+}
+
+async function runTeamSelectionPhase(teamLogins, submissionsByTeam) {
+  for (const [index, login] of teamLogins.entries()) {
+    await sleep(index === 0 ? 600 : 1_000)
+    const submissions = submissionsByTeam.get(login.team.id) ?? []
+    const selected = submissions.at(-1)
+    if (!selected) throw new Error(`No submission available for ${login.team.name}`)
+    log(`${login.team.name} selects #${selected.id.slice(0, 8)}`)
+    await teamRequest(login.token, "/game/rounds/current/team-selection-votes", {
+      method: "POST",
+      headers: { "x-device-id": `demo-${runId}-${index}` },
+      body: { submission_id: selected.id },
+    })
+  }
+}
+
+async function runPublicVotingPhase(teamLogins, submissionsByTeam) {
+  const latestSubmissions = teamLogins.map((login) => {
+    const submissions = submissionsByTeam.get(login.team.id) ?? []
+    const submission = submissions.at(-1)
+    if (!submission) throw new Error(`No selected submission for ${login.team.name}`)
+    return { team: login.team, submission }
+  })
+
+  for (const [index, login] of teamLogins.entries()) {
+    await sleep(index === 0 ? 800 : 900)
+    const choices = latestSubmissions
+      .map((item, teamIndex) => ({ ...item, teamIndex }))
+      .filter((item) => item.team.id !== login.team.id)
+      .sort((left, right) => votePreference(index, right.teamIndex) - votePreference(index, left.teamIndex))
+      .slice(0, 2)
+      .map((item, rankIndex) => ({
+        target_team_id: item.team.id,
+        target_submission_id: item.submission.id,
+        rank: rankIndex + 1,
+      }))
+    log(`${login.team.name} votes for ${choices.map((choice) => latestSubmissions.find((item) => item.team.id === choice.target_team_id)?.team.name).join(", ")}`)
+    await teamRequest(login.token, "/game/rounds/current/public-votes", {
+      method: "POST",
+      body: { votes: choices },
+    })
+  }
+}
+
+function votePreference(voterIndex, teamIndex) {
+  const scriptedFavorites = [1, 3, 1, 0, 3, 1]
+  const favorite = scriptedFavorites[voterIndex]
+  if (teamIndex === favorite) return 100
+  return 50 - Math.abs(teamIndex - favorite)
+}
+
+function turtleProgram(seed, variant) {
+  const [x, y] = seed.start
+  const length = variant === 1 ? 132 : 176
+  const inset = variant === 1 ? 58 : 82
+  return {
+    version: 1,
+    canvas: programCanvas,
+    start: {
+      x,
+      y,
+      heading: 0,
+      pen_down: true,
+      stroke_color: seed.color,
+      stroke_width: variant === 1 ? 7 : 10,
+    },
+    blocks: [
+      { id: `${seed.name}-width-${variant}`, type: "set_stroke_width", args: { width: variant === 1 ? 7 : 10 } },
+      { id: `${seed.name}-color-${variant}`, type: "set_color", args: { color: seed.color } },
+      {
+        id: `${seed.name}-box-${variant}`,
+        type: "repeat",
+        args: { times: 4 },
+        children: [
+          { id: `${seed.name}-box-forward-${variant}`, type: "forward", args: { distance: length } },
+          { id: `${seed.name}-box-turn-${variant}`, type: "turn_right", args: { degrees: 90 } },
+        ],
+      },
+      { id: `${seed.name}-pen-up-${variant}`, type: "pen_up", args: {} },
+      { id: `${seed.name}-goto-${variant}`, type: "goto", args: { x: x + inset, y: y + inset } },
+      { id: `${seed.name}-pen-down-${variant}`, type: "pen_down", args: {} },
+      { id: `${seed.name}-accent-${variant}`, type: "set_color", args: { color: seed.accent } },
+      {
+        id: `${seed.name}-triangle-${variant}`,
+        type: "repeat",
+        args: { times: 3 },
+        children: [
+          { id: `${seed.name}-tri-forward-${variant}`, type: "forward", args: { distance: Math.round(length * 0.62) } },
+          { id: `${seed.name}-tri-turn-${variant}`, type: "turn_right", args: { degrees: 120 } },
+        ],
+      },
+      { id: `${seed.name}-wait-${variant}`, type: "wait", args: { duration_ms: 200 } },
+    ],
+  }
+}
+
+async function adminRequest(token, path, options = {}) {
+  return request(path, { ...options, token })
+}
+
+async function teamRequest(token, path, options = {}) {
+  return request(path, { ...options, token })
+}
+
+async function request(path, options = {}) {
+  const url = `${options.base ?? API_BASE}${path}`
+  const headers = new Headers(options.headers ?? {})
+  if (options.body !== undefined) headers.set("content-type", "application/json")
+  if (options.token) headers.set("authorization", `Bearer ${options.token}`)
+
+  const response = await fetch(url, {
+    method: options.method ?? "GET",
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  })
+  if (!response.ok) {
+    let details = await response.text()
+    try {
+      details = JSON.stringify(JSON.parse(details))
+    } catch {
+      // Keep text details.
+    }
+    throw new Error(`${options.method ?? "GET"} ${url} failed with ${response.status}: ${details}`)
+  }
+  const contentType = response.headers.get("content-type") ?? ""
+  return contentType.includes("application/json") ? response.json() : response.text()
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function log(message) {
+  console.log(`[demo ${new Date().toLocaleTimeString()}] ${message}`)
+}
+
+function readEnvFile(path) {
+  if (!existsSync(path)) return {}
+  return Object.fromEntries(
+    readFileSync(path, "utf8")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#") && line.includes("="))
+      .map((line) => {
+        const index = line.indexOf("=")
+        return [line.slice(0, index), line.slice(index + 1)]
+      }),
+  )
+}
