@@ -2,20 +2,13 @@ import { clearAdminToken, getAdminToken } from "@/lib/admin/session"
 import type {
   AdminLoginResponse,
   AdminMeResponse,
-  AdminTeamDetails,
   ApiErrorBody,
-  BlackboardState,
   Challenge,
   ChallengeSet,
-  JudgeQueueResponse,
-  LeaderboardResponse,
   ReadinessResponse,
-  ScoreEvent,
-  ScoreEventType,
-  Submission,
-  SubmissionStatus,
   Team,
 } from "@/lib/admin/types"
+import type { BlackboardState, GamePhase, GameStateResponse, LeaderboardResponse } from "@/lib/game/types"
 
 export class AdminApiError extends Error {
   code: string
@@ -101,9 +94,6 @@ export const adminApi = {
   teams(filters: { enabled?: boolean | null; search?: string }) {
     return request<Team[]>(`/api/v1/admin/teams${query(filters)}`)
   },
-  team(id: string) {
-    return request<AdminTeamDetails>(`/api/v1/admin/teams/${id}`)
-  },
   createTeam(input: { name: string; login_code?: string; note?: string }) {
     return request<Team>("/api/v1/admin/teams", { method: "POST", body: jsonBody(input) })
   },
@@ -131,6 +121,11 @@ export const adminApi = {
   createChallengeSet(input: { name: string; version: string }) {
     return request<ChallengeSet>("/api/v1/admin/challenge-sets", { method: "POST", body: jsonBody(input) })
   },
+  importChallengeSet(file: File) {
+    const data = new FormData()
+    data.append("file", file)
+    return request<ChallengeSet>("/api/v1/admin/challenge-sets/import", { method: "POST", body: data })
+  },
   activateChallengeSet(id: string) {
     return request<ChallengeSet>(`/api/v1/admin/challenge-sets/${id}/activate`, { method: "POST" })
   },
@@ -140,16 +135,8 @@ export const adminApi = {
   exportChallengeSet(id: string) {
     return request<Blob>(`/api/v1/admin/challenge-sets/${id}/export`)
   },
-  importChallengeSet(file: File) {
-    const data = new FormData()
-    data.append("file", file)
-    return request<ChallengeSet>("/api/v1/admin/challenge-sets/import", { method: "POST", body: data })
-  },
   challenges(filters: { challenge_set_id?: string; active_only?: boolean }) {
     return request<Challenge[]>(`/api/v1/admin/challenges${query(filters)}`)
-  },
-  challenge(id: string) {
-    return request<Challenge>(`/api/v1/admin/challenges/${id}`)
   },
   createChallenge(setId: string, input: {
     slug: string
@@ -165,13 +152,16 @@ export const adminApi = {
       body: jsonBody(input),
     })
   },
-  updateChallenge(id: string, input: Partial<Pick<Challenge, "title" | "description" | "points" | "pass_threshold" | "enabled" | "order">>) {
+  updateChallenge(
+    id: string,
+    input: Partial<Pick<Challenge, "title" | "description" | "points" | "pass_threshold" | "enabled" | "order">>,
+  ) {
     return request<Challenge>(`/api/v1/admin/challenges/${id}`, { method: "PATCH", body: jsonBody(input) })
   },
   disableChallenge(id: string) {
     return request<Challenge>(`/api/v1/admin/challenges/${id}`, { method: "DELETE" })
   },
-  uploadChallengeImage(id: string, file: File) {
+  uploadChallengeTargetImage(id: string, file: File) {
     const data = new FormData()
     data.append("file", file)
     return request<Challenge>(`/api/v1/admin/challenges/${id}/target-image`, { method: "POST", body: data })
@@ -179,51 +169,29 @@ export const adminApi = {
   reorderChallenges(items: Array<{ challenge_id: string; order: number }>) {
     return request<Challenge[]>("/api/v1/admin/challenges/reorder", { method: "POST", body: jsonBody({ items }) })
   },
-  submissions(filters: { team_id?: string; challenge_id?: string; status?: SubmissionStatus | "" }) {
-    return request<Submission[]>(`/api/v1/admin/submissions${query(filters)}`)
+  gameState() {
+    return request<GameStateResponse>("/api/v1/game/state")
   },
-  submission(id: string) {
-    return request<Submission>(`/api/v1/admin/submissions/${id}`)
-  },
-  retrySubmission(id: string) {
-    return request<{ submission: Submission; position: number | null }>(`/api/v1/admin/submissions/${id}/retry`, { method: "POST" })
-  },
-  cancelSubmission(id: string) {
-    return request<Submission>(`/api/v1/admin/submissions/${id}/cancel`, { method: "POST" })
-  },
-  judgeQueue() {
-    return request<JudgeQueueResponse>("/api/v1/admin/judge-queue")
-  },
-  pauseQueue() {
-    return request<{ paused: boolean }>("/api/v1/admin/judge-queue/pause", { method: "POST" })
-  },
-  resumeQueue() {
-    return request<{ paused: boolean }>("/api/v1/admin/judge-queue/resume", { method: "POST" })
-  },
-  prioritizeSubmission(id: string, position: number) {
-    return request<Submission>(`/api/v1/admin/judge-queue/${id}/prioritize`, {
+  startRound(input: { challenge_id: string; submission_seconds: number; public_votes_per_team: number }) {
+    return request<GameStateResponse>("/api/v1/admin/game/rounds", {
       method: "POST",
-      body: jsonBody({ position }),
+      body: jsonBody(input),
     })
   },
-  scoreEvents(filters: { team_id?: string; challenge_id?: string; type?: ScoreEventType | "" }) {
-    return request<ScoreEvent[]>(`/api/v1/admin/score-events${query(filters)}`)
+  updateGameTimer(input: { phase_ends_at?: string; add_seconds?: number }) {
+    return request<GameStateResponse>("/api/v1/admin/game/timer", {
+      method: "PATCH",
+      body: jsonBody(input),
+    })
   },
-  bulkAdjustScores(input:
-    | { operation: "add"; team_ids: string[]; amount: number; reason: string }
-    | { operation: "subtract"; team_ids: string[]; amount: number; reason: string }
-    | { operation: "set"; team_ids: string[]; target_score: number; reason: string }
-  ) {
-    return request<{ updated_teams: Array<{ team_id: string; score_before: number; score_after: number; delta: number; score_event_id: string }> }>(
-      "/api/v1/admin/scores/bulk-adjust",
-      { method: "POST", body: jsonBody(input) },
-    )
+  setGamePhase(phase: GamePhase) {
+    return request<GameStateResponse>("/api/v1/admin/game/phase", {
+      method: "POST",
+      body: jsonBody({ phase }),
+    })
   },
-  recalculateScores() {
-    return request<{ teams: Team[] }>("/api/v1/admin/scores/recalculate", { method: "POST" })
-  },
-  recalculateChallengeAwards() {
-    return request<{ teams: Team[] }>("/api/v1/admin/scores/recalculate-challenge-awards", { method: "POST" })
+  scoreCurrentRound() {
+    return request<GameStateResponse>("/api/v1/admin/game/score", { method: "POST", body: jsonBody({}) })
   },
   leaderboard() {
     return request<LeaderboardResponse>("/api/v1/leaderboard", { admin: false })
