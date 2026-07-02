@@ -24,7 +24,10 @@ use crate::{
         Round, RoundResultEntry, Submission, TeamId, TeamNomination, TeamSelectionVote,
     },
     routes::submissions::judge_and_store_submission,
-    state::{AppEvent, AppState, GameError, GameSnapshot, RateLimitStatus, StartRoundInput},
+    state::{
+        AppEvent, AppState, GameError, GameSnapshot, PublicVoteCount, RateLimitStatus,
+        StartRoundInput,
+    },
 };
 
 pub fn router() -> Router<AppState> {
@@ -50,14 +53,16 @@ pub fn router() -> Router<AppState> {
 }
 
 #[derive(Debug, Serialize)]
-struct GameStateResponse {
+pub(crate) struct GameStateResponse {
     state: GameStateView,
     round: Option<Round>,
     challenge: Option<Challenge>,
+    round_submissions: Vec<Submission>,
     my_submissions: Vec<Submission>,
     nominations: Vec<TeamNomination>,
     my_team_selection_vote: Option<TeamSelectionVote>,
     my_public_vote: Option<PublicVote>,
+    public_vote_counts: Vec<PublicVoteCount>,
     results: Vec<RoundResultEntry>,
 }
 
@@ -67,10 +72,12 @@ impl From<GameSnapshot> for GameStateResponse {
             state: snapshot.state,
             round: snapshot.round,
             challenge: snapshot.challenge,
+            round_submissions: snapshot.round_submissions,
             my_submissions: snapshot.my_submissions,
             nominations: snapshot.nominations,
             my_team_selection_vote: snapshot.my_team_selection_vote,
             my_public_vote: snapshot.my_public_vote,
+            public_vote_counts: snapshot.public_vote_counts,
             results: snapshot.results,
         }
     }

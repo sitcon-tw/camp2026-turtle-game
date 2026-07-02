@@ -330,11 +330,20 @@ pub struct GameSnapshot {
     pub state: GameStateView,
     pub round: Option<Round>,
     pub challenge: Option<Challenge>,
+    pub round_submissions: Vec<Submission>,
     pub my_submissions: Vec<Submission>,
     pub nominations: Vec<TeamNomination>,
     pub my_team_selection_vote: Option<TeamSelectionVote>,
     pub my_public_vote: Option<PublicVote>,
+    pub public_vote_counts: Vec<PublicVoteCount>,
     pub results: Vec<RoundResultEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PublicVoteCount {
+    pub target_team_id: TeamId,
+    pub target_submission_id: SubmissionId,
+    pub vote_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -362,20 +371,19 @@ impl GameStore {
         let challenge = state
             .current_challenge_id
             .and_then(|challenge_id| repository.get_challenge(challenge_id).ok().flatten());
-        let my_submissions =
-            if let (Some(round_id), Some(team_id)) = (state.current_round_id, team_id) {
-                inner
-                    .round_submissions
+        let round_submissions = state
+            .current_round_id
+            .map(|round_id| inner.submissions_for_round(repository, round_id))
+            .unwrap_or_default();
+        let my_submissions = team_id
+            .map(|team_id| {
+                round_submissions
                     .iter()
-                    .filter(|(_, stored_round_id)| **stored_round_id == round_id)
-                    .filter_map(|(submission_id, _)| {
-                        repository.get_submission(*submission_id).ok().flatten()
-                    })
                     .filter(|submission| submission.team_id == team_id)
+                    .cloned()
                     .collect()
-            } else {
-                Vec::new()
-            };
+            })
+            .unwrap_or_default();
         let nominations = state
             .current_round_id
             .map(|round_id| inner.nominations_for_round(round_id))
@@ -398,14 +406,20 @@ impl GameStore {
             .current_round_id
             .and_then(|round_id| inner.results.get(&round_id).cloned())
             .unwrap_or_default();
+        let public_vote_counts = state
+            .current_round_id
+            .map(|round_id| inner.public_vote_counts_for_round(round_id))
+            .unwrap_or_default();
         Ok(GameSnapshot {
             state,
             round,
             challenge,
+            round_submissions,
             my_submissions,
             nominations,
             my_team_selection_vote,
             my_public_vote,
+            public_vote_counts,
             results,
         })
     }
@@ -833,6 +847,56 @@ impl GameInner {
             .collect();
         nominations.sort_by(|left, right| left.team_id.cmp(&right.team_id));
         nominations
+    }
+
+    fn submissions_for_round(
+        &self,
+        repository: &dyn Repository,
+        round_id: RoundId,
+    ) -> Vec<Submission> {
+        let mut submissions: Vec<_> = self
+            .round_submissions
+            .iter()
+            .filter(|(_, stored_round_id)| **stored_round_id == round_id)
+            .filter_map(|(submission_id, _)| repository.get_submission(*submission_id).ok().flatten())
+            .collect();
+        submissions.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then(left.team_id.cmp(&right.team_id))
+                .then(left.id.cmp(&right.id))
+        });
+        submissions
+    }
+
+    fn public_vote_counts_for_round(&self, round_id: RoundId) -> Vec<PublicVoteCount> {
+        let mut counts: HashMap<(TeamId, SubmissionId), usize> = HashMap::new();
+        for vote in self
+            .public_votes
+            .values()
+            .filter(|vote| vote.round_id == round_id)
+        {
+            for choice in &vote.choices {
+                *counts
+                    .entry((choice.target_team_id, choice.target_submission_id))
+                    .or_default() += 1;
+            }
+        }
+        let mut counts: Vec<_> = counts
+            .into_iter()
+            .map(|((target_team_id, target_submission_id), vote_count)| PublicVoteCount {
+                target_team_id,
+                target_submission_id,
+                vote_count,
+            })
+            .collect();
+        counts.sort_by(|left, right| {
+            right
+                .vote_count
+                .cmp(&left.vote_count)
+                .then(left.target_team_id.cmp(&right.target_team_id))
+        });
+        counts
     }
 
     fn lock_nominations(&mut self, round_id: RoundId, now: DateTime<Utc>) {

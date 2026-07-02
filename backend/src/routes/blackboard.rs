@@ -14,6 +14,8 @@ use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
 use crate::{
     error::AppError,
+    models::TeamId,
+    routes::game::GameStateResponse,
     routes::submissions::{LeaderboardEntry, leaderboard_entries},
     state::{AppEvent, AppState},
 };
@@ -27,7 +29,17 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Serialize)]
 struct BlackboardState {
     status: BlackboardStatus,
+    game: GameStateResponse,
+    teams: Vec<BlackboardTeam>,
     leaderboard: Vec<LeaderboardEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct BlackboardTeam {
+    id: TeamId,
+    name: String,
+    enabled: bool,
+    total_score: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -40,9 +52,27 @@ async fn blackboard_state(
     State(state): State<AppState>,
 ) -> Result<Json<BlackboardState>, AppError> {
     let leaderboard = leaderboard_entries(state.repository.leaderboard()?);
+    let teams = state
+        .repository
+        .list_teams()?
+        .into_iter()
+        .map(|team| BlackboardTeam {
+            id: team.id,
+            name: team.name,
+            enabled: team.enabled,
+            total_score: team.total_score,
+        })
+        .collect();
+    let game = state
+        .game
+        .snapshot(state.repository.as_ref(), None)
+        .map_err(|error| AppError::internal(format!("game snapshot is unavailable: {error}")))?
+        .into();
 
     Ok(Json(BlackboardState {
         status: BlackboardStatus::Idle,
+        game,
+        teams,
         leaderboard,
     }))
 }

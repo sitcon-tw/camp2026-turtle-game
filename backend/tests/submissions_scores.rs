@@ -106,6 +106,8 @@ async fn submit_completion_does_not_award_points_or_change_leaderboard() {
     assert_eq!(first_body["submission"]["passed"], true);
     assert_eq!(first_body["submission"]["awarded_points"], 0);
 
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
     let second_response = app
         .clone()
         .oneshot(
