@@ -69,12 +69,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { adminApi, errorMessage } from "@/lib/admin/api"
 import type { Challenge, ChallengeSet } from "@/lib/admin/types"
+import { cn } from "@/lib/utils"
 
-type SetFilter = "all" | "active" | string
 type EnabledFilter = "all" | "enabled" | "disabled"
 
 type ChallengeForm = {
@@ -158,15 +157,11 @@ function exportFileName(set: ChallengeSet) {
   return `${set.name}-${set.version}.zip`.replace(/[^\w.-]+/g, "-")
 }
 
-function isConcreteSetFilter(value: SetFilter) {
-  return value !== "all" && value !== "active"
-}
-
 export default function AdminChallengesPage() {
   const queryClient = useQueryClient()
   const importInputRef = React.useRef<HTMLInputElement | null>(null)
   const imageInputRef = React.useRef<HTMLInputElement | null>(null)
-  const [setFilter, setSetFilter] = React.useState<SetFilter>("active")
+  const [requestedSetId, setSelectedSetId] = React.useState("")
   const [enabledFilter, setEnabledFilter] = React.useState<EnabledFilter>("all")
   const [search, setSearch] = React.useState("")
   const [setCreateOpen, setSetCreateOpen] = React.useState(false)
@@ -187,25 +182,27 @@ export default function AdminChallengesPage() {
     queryFn: adminApi.challengeSets,
   })
 
-  const challengesQuery = useQuery({
-    queryKey: [...challengesQueryKey, { setFilter }],
-    queryFn: () =>
-      adminApi.challenges({
-        active_only: setFilter === "active" ? true : undefined,
-        challenge_set_id: isConcreteSetFilter(setFilter) ? setFilter : undefined,
-      }),
-  })
-
   const sets = setsQuery.data ?? emptyChallengeSets
   const activeSet = sets.find((set) => set.status === "active")
   const setsById = React.useMemo(() => new Map(sets.map((set) => [set.id, set])), [sets])
-  const defaultCreateSetId = isConcreteSetFilter(setFilter)
-    ? setFilter
+  const selectedSetId = setsById.has(requestedSetId)
+    ? requestedSetId
     : activeSet?.id ?? sets.find((set) => set.status === "draft")?.id ?? sets[0]?.id ?? ""
+
+  const challengesQuery = useQuery({
+    queryKey: [...challengesQueryKey, { selectedSetId }],
+    queryFn: () => (selectedSetId ? adminApi.challenges({ challenge_set_id: selectedSetId }) : Promise.resolve([])),
+    enabled: Boolean(selectedSetId),
+  })
+
+  const selectedSet = setsById.get(selectedSetId)
+  const orderedChallenges = React.useMemo(() => sortedChallenges(challengesQuery.data ?? []), [challengesQuery.data])
+  const canReorder = enabledFilter === "all" && search.trim() === ""
+  const defaultCreateSetId = selectedSetId
 
   const visibleChallenges = React.useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase()
-    return sortedChallenges(challengesQuery.data ?? []).filter((challenge) => {
+    return orderedChallenges.filter((challenge) => {
       if (enabledFilter === "enabled" && !challenge.enabled) return false
       if (enabledFilter === "disabled" && challenge.enabled) return false
       if (!normalizedSearch) return true
@@ -214,7 +211,7 @@ export default function AdminChallengesPage() {
         challenge.slug.toLowerCase().includes(normalizedSearch)
       )
     })
-  }, [challengesQuery.data, enabledFilter, search])
+  }, [enabledFilter, orderedChallenges, search])
 
   const invalidateChallengeData = React.useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: challengeSetsQueryKey })
@@ -225,6 +222,7 @@ export default function AdminChallengesPage() {
     mutationFn: adminApi.createChallengeSet,
     onSuccess: (set) => {
       toast.success(`Created ${set.name}`)
+      setSelectedSetId(set.id)
       setSetForm({ name: "", version: "" })
       setSetCreateOpen(false)
       invalidateChallengeData()
@@ -236,6 +234,7 @@ export default function AdminChallengesPage() {
     mutationFn: adminApi.importChallengeSet,
     onSuccess: (set) => {
       toast.success(`Imported ${set.name}`)
+      setSelectedSetId(set.id)
       setImportFile(null)
       if (importInputRef.current) importInputRef.current.value = ""
       setSetImportOpen(false)
@@ -248,7 +247,7 @@ export default function AdminChallengesPage() {
     mutationFn: adminApi.activateChallengeSet,
     onSuccess: (set) => {
       toast.success(`Activated ${set.name}`)
-      setSetFilter(set.id)
+      setSelectedSetId(set.id)
       invalidateChallengeData()
     },
     onError: (error) => toast.error(errorMessage(error)),
@@ -288,6 +287,7 @@ export default function AdminChallengesPage() {
       }),
     onSuccess: (challenge) => {
       toast.success(`Created ${challenge.title}`)
+      setSelectedSetId(challenge.challenge_set_id)
       setCreateForm(emptyChallengeForm)
       setChallengeCreateOpen(false)
       invalidateChallengeData()
@@ -367,7 +367,7 @@ export default function AdminChallengesPage() {
     setCreateForm({
       ...emptyChallengeForm,
       challenge_set_id: defaultCreateSetId,
-      order: String((challengesQuery.data ?? []).length + 1),
+      order: String(orderedChallenges.length + 1),
     })
     setChallengeCreateOpen(true)
   }
@@ -389,7 +389,7 @@ export default function AdminChallengesPage() {
     event.preventDefault()
     const challengeSetId = createForm.challenge_set_id || defaultCreateSetId
     if (!challengeSetId) {
-      toast.error("Create or select a challenge set first.")
+      toast.error("Select or create a challenge set first.")
       return
     }
     createChallenge.mutate({ ...createForm, challenge_set_id: challengeSetId })
@@ -411,10 +411,14 @@ export default function AdminChallengesPage() {
   }
 
   function moveChallenge(index: number, direction: -1 | 1) {
+    if (!canReorder) {
+      toast.error("Clear filters before changing challenge order.")
+      return
+    }
     const nextIndex = index + direction
-    if (nextIndex < 0 || nextIndex >= visibleChallenges.length) return
+    if (nextIndex < 0 || nextIndex >= orderedChallenges.length) return
 
-    const next = [...visibleChallenges]
+    const next = [...orderedChallenges]
     const moved = next[index]
     next[index] = next[nextIndex]
     next[nextIndex] = moved
@@ -451,90 +455,86 @@ export default function AdminChallengesPage() {
             )}
             Refresh
           </Button>
-          <Button onClick={openCreateChallengeDialog} disabled={sets.length === 0}>
+          <Button onClick={openCreateChallengeDialog} disabled={!selectedSet}>
             <PlusIcon data-icon="inline-start" />
             New challenge
           </Button>
         </div>
       </div>
 
-      <Tabs defaultValue="challenges">
-        <TabsList>
-          <TabsTrigger value="challenges">
-            <ListChecksIcon data-icon="inline-start" />
-            Challenges
-          </TabsTrigger>
-          <TabsTrigger value="sets">
-            <ArchiveIcon data-icon="inline-start" />
-            Sets
-          </TabsTrigger>
-        </TabsList>
+      <div className="grid gap-4 xl:grid-cols-[22rem_minmax(0,1fr)]">
+        <ChallengeSetRail
+          sets={sets}
+          selectedSetId={selectedSetId}
+          isLoading={setsQuery.isLoading}
+          error={setsQuery.error}
+          onSelect={setSelectedSetId}
+          onCreate={() => setSetCreateOpen(true)}
+          onImport={() => setSetImportOpen(true)}
+          onRetry={() => void setsQuery.refetch()}
+        />
 
-        <TabsContent value="challenges">
-          <div className="grid gap-4">
-            <ChallengeFilters
-              sets={sets}
-              setFilter={setFilter}
-              enabledFilter={enabledFilter}
-              search={search}
-              onSetFilterChange={setSetFilter}
-              onEnabledFilterChange={setEnabledFilter}
-              onSearchChange={setSearch}
-            />
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Challenge list</CardTitle>
-                <CardDescription>{visibleChallenges.length} visible challenge records</CardDescription>
-                <CardAction>
-                  {activeSet ? (
-                    <Badge variant="secondary">Active set: {setLabel(activeSet)}</Badge>
-                  ) : (
-                    <Badge variant="outline">No active set</Badge>
-                  )}
-                </CardAction>
-              </CardHeader>
-              <CardContent>
-                <ChallengesTable
-                  challenges={visibleChallenges}
-                  setsById={setsById}
-                  isLoading={setsQuery.isLoading || challengesQuery.isLoading}
-                  error={setsQuery.error ?? challengesQuery.error}
-                  reorderPending={reorderChallenges.isPending}
-                  disablePending={disableChallenge.isPending}
-                  hasSets={sets.length > 0}
-                  onCreate={openCreateChallengeDialog}
-                  onEdit={openEditChallengeDialog}
-                  onImage={openImageDialog}
-                  onDisable={(challenge) => disableChallenge.mutate(challenge.id)}
-                  onMove={moveChallenge}
-                  onRetry={() => {
-                    void setsQuery.refetch()
-                    void challengesQuery.refetch()
-                  }}
-                />
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="sets">
-          <ChallengeSetsPanel
-            sets={sets}
-            isLoading={setsQuery.isLoading}
-            error={setsQuery.error}
+        <div className="grid min-w-0 gap-4">
+          <SelectedSetSummary
+            set={selectedSet}
+            activeSet={activeSet}
+            challenges={orderedChallenges}
             activatePending={activateSet.isPending}
             archivePending={archiveSet.isPending}
             exportPending={exportSet.isPending}
-            onCreate={() => setSetCreateOpen(true)}
-            onImport={() => setSetImportOpen(true)}
-            onRetry={() => void setsQuery.refetch()}
             onActivate={(set) => activateSet.mutate(set.id)}
             onArchive={(set) => archiveSet.mutate(set.id)}
             onExport={(set) => exportSet.mutate(set)}
           />
-        </TabsContent>
-      </Tabs>
+
+          <Card>
+            <CardHeader className="border-b">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <CardTitle className="flex items-center gap-2">
+                    <ListChecksIcon />
+                    Challenges in selected set
+                  </CardTitle>
+                  <CardDescription>
+                    {selectedSet
+                      ? `${visibleChallenges.length} of ${orderedChallenges.length} challenges visible`
+                      : "Select or create a challenge set to manage its challenges."}
+                    {selectedSet && !canReorder ? " Clear filters to reorder." : ""}
+                  </CardDescription>
+                </div>
+                <ChallengeListToolbar
+                  enabledFilter={enabledFilter}
+                  search={search}
+                  canCreate={Boolean(selectedSet)}
+                  onEnabledFilterChange={setEnabledFilter}
+                  onSearchChange={setSearch}
+                  onCreate={openCreateChallengeDialog}
+                />
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              <ChallengesTable
+                challenges={visibleChallenges}
+                isLoading={setsQuery.isLoading || (Boolean(selectedSetId) && challengesQuery.isLoading)}
+                error={setsQuery.error ?? challengesQuery.error}
+                reorderPending={reorderChallenges.isPending}
+                disablePending={disableChallenge.isPending}
+                canCreate={Boolean(selectedSet)}
+                canReorder={canReorder}
+                onCreate={openCreateChallengeDialog}
+                onEdit={openEditChallengeDialog}
+                onImage={openImageDialog}
+                onDisable={(challenge) => disableChallenge.mutate(challenge.id)}
+                onMove={moveChallenge}
+                onRetry={() => {
+                  void setsQuery.refetch()
+                  void challengesQuery.refetch()
+                }}
+              />
+            </CardContent>
+          </Card>
+        </div>
+      </div>
 
       <Dialog open={setCreateOpen} onOpenChange={setSetCreateOpen}>
         <DialogContent>
@@ -682,136 +682,39 @@ export default function AdminChallengesPage() {
   )
 }
 
-function ChallengeFilters({
+function ChallengeSetRail({
   sets,
-  setFilter,
-  enabledFilter,
-  search,
-  onSetFilterChange,
-  onEnabledFilterChange,
-  onSearchChange,
-}: {
-  sets: ChallengeSet[]
-  setFilter: SetFilter
-  enabledFilter: EnabledFilter
-  search: string
-  onSetFilterChange: (value: SetFilter) => void
-  onEnabledFilterChange: (value: EnabledFilter) => void
-  onSearchChange: (value: string) => void
-}) {
-  const setItems = [
-    { value: "active", label: "Active set" },
-    { value: "all", label: "All sets" },
-    ...sets.map((set) => ({ value: set.id, label: setLabel(set) })),
-  ]
-  const enabledItems = [
-    { value: "all", label: "All challenges" },
-    { value: "enabled", label: "Enabled" },
-    { value: "disabled", label: "Disabled" },
-  ]
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Filters</CardTitle>
-        <CardDescription>Narrow the challenge list by set, enabled state, or title.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <FieldGroup className="grid gap-4 md:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,1fr)]">
-          <Field>
-            <FieldLabel>Challenge set</FieldLabel>
-            <Select items={setItems} value={setFilter} onValueChange={(value) => onSetFilterChange(String(value))}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="active">Active set</SelectItem>
-                  <SelectItem value="all">All sets</SelectItem>
-                  {sets.map((set) => (
-                    <SelectItem key={set.id} value={set.id}>
-                      {setLabel(set)}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field>
-            <FieldLabel>Enabled state</FieldLabel>
-            <Select
-              items={enabledItems}
-              value={enabledFilter}
-              onValueChange={(value) => onEnabledFilterChange(String(value) as EnabledFilter)}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="all">All challenges</SelectItem>
-                  <SelectItem value="enabled">Enabled</SelectItem>
-                  <SelectItem value="disabled">Disabled</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="challenge-search">Search</FieldLabel>
-            <Input
-              id="challenge-search"
-              value={search}
-              onChange={(event) => onSearchChange(event.target.value)}
-              placeholder="Slug or title"
-            />
-          </Field>
-        </FieldGroup>
-      </CardContent>
-    </Card>
-  )
-}
-
-function ChallengeSetsPanel({
-  sets,
+  selectedSetId,
   isLoading,
   error,
-  activatePending,
-  archivePending,
-  exportPending,
+  onSelect,
   onCreate,
   onImport,
   onRetry,
-  onActivate,
-  onArchive,
-  onExport,
 }: {
   sets: ChallengeSet[]
+  selectedSetId: string
   isLoading: boolean
   error: unknown
-  activatePending: boolean
-  archivePending: boolean
-  exportPending: boolean
+  onSelect: (setId: string) => void
   onCreate: () => void
   onImport: () => void
   onRetry: () => void
-  onActivate: (set: ChallengeSet) => void
-  onArchive: (set: ChallengeSet) => void
-  onExport: (set: ChallengeSet) => void
 }) {
   return (
-    <Card>
-      <CardHeader>
+    <Card className="xl:sticky xl:top-20 xl:self-start">
+      <CardHeader className="border-b">
         <CardTitle>Challenge sets</CardTitle>
-        <CardDescription>{sets.length} challenge set records</CardDescription>
+        <CardDescription>{sets.length} sets available</CardDescription>
         <CardAction>
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="outline" onClick={onImport}>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={onImport}>
               <FileUpIcon data-icon="inline-start" />
               Import
             </Button>
-            <Button onClick={onCreate}>
+            <Button size="sm" onClick={onCreate}>
               <PlusIcon data-icon="inline-start" />
-              New set
+              New
             </Button>
           </div>
         </CardAction>
@@ -857,75 +760,221 @@ function ChallengeSetsPanel({
             </EmptyContent>
           </Empty>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Version</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Challenges</TableHead>
-                <TableHead>Updated</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {sets.map((set) => (
-                <TableRow key={set.id}>
-                  <TableCell className="font-medium">{set.name}</TableCell>
-                  <TableCell>{set.version}</TableCell>
-                  <TableCell>
+          <div className="flex flex-col gap-2">
+            {sets.map((set) => {
+              const selected = set.id === selectedSetId
+
+              return (
+                <button
+                  key={set.id}
+                  type="button"
+                  className={cn(
+                    "rounded-lg border p-3 text-left transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    selected ? "border-primary bg-muted" : "border-border bg-background",
+                  )}
+                  onClick={() => onSelect(set.id)}
+                >
+                  <span className="flex items-start justify-between gap-3">
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">{set.name}</span>
+                      <span className="block truncate text-xs text-muted-foreground">Version {set.version}</span>
+                    </span>
                     <Badge variant={statusVariant(set.status)}>{set.status}</Badge>
-                  </TableCell>
-                  <TableCell>{set.challenge_count ?? 0}</TableCell>
-                  <TableCell>{formatDate(set.updated_at)}</TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-2">
-                      <Button size="sm" variant="outline" onClick={() => onExport(set)} disabled={exportPending}>
-                        <DownloadIcon data-icon="inline-start" />
-                        Export
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => onActivate(set)}
-                        disabled={set.status === "active" || activatePending}
-                      >
-                        <PlayIcon data-icon="inline-start" />
-                        Activate
-                      </Button>
-                      <ConfirmAction
-                        title="Archive challenge set"
-                        description={`${set.name} will no longer be available for active play.`}
-                        confirmLabel="Archive"
-                        destructive
-                        disabled={set.status === "archived" || archivePending}
-                        onConfirm={() => onArchive(set)}
-                      >
-                        <Button size="sm" variant="destructive" disabled={set.status === "archived" || archivePending}>
-                          <ArchiveIcon data-icon="inline-start" />
-                          Archive
-                        </Button>
-                      </ConfirmAction>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+                  </span>
+                  <span className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span>{set.challenge_count ?? 0} challenges</span>
+                    <span className="truncate">Updated {formatDate(set.updated_at)}</span>
+                  </span>
+                </button>
+              )
+            })}
+          </div>
         )}
       </CardContent>
     </Card>
   )
 }
 
+function SelectedSetSummary({
+  set,
+  activeSet,
+  challenges,
+  activatePending,
+  archivePending,
+  exportPending,
+  onActivate,
+  onArchive,
+  onExport,
+}: {
+  set: ChallengeSet | undefined
+  activeSet: ChallengeSet | undefined
+  challenges: Challenge[]
+  activatePending: boolean
+  archivePending: boolean
+  exportPending: boolean
+  onActivate: (set: ChallengeSet) => void
+  onArchive: (set: ChallengeSet) => void
+  onExport: (set: ChallengeSet) => void
+}) {
+  if (!set) {
+    return (
+      <Card>
+        <CardContent className="pt-(--card-spacing)">
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <ArchiveIcon />
+              </EmptyMedia>
+              <EmptyTitle>Select a challenge set</EmptyTitle>
+              <EmptyDescription>
+                Challenge set actions and challenge content will appear together here.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const enabledCount = challenges.filter((challenge) => challenge.enabled).length
+  const missingTargetCount = challenges.filter((challenge) => !challenge.target_image_asset_id).length
+  const totalPoints = challenges.reduce((sum, challenge) => sum + challenge.points, 0)
+
+  return (
+    <Card>
+      <CardHeader className="border-b">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div className="min-w-0">
+            <CardTitle className="flex flex-wrap items-center gap-2">
+              {set.name}
+              <Badge variant={statusVariant(set.status)}>{set.status}</Badge>
+            </CardTitle>
+            <CardDescription className="mt-1">
+              Version {set.version} · Updated {formatDate(set.updated_at)}
+              {activeSet && activeSet.id !== set.id ? ` · Active set is ${setLabel(activeSet)}` : ""}
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button size="sm" variant="outline" onClick={() => onExport(set)} disabled={exportPending}>
+              <DownloadIcon data-icon="inline-start" />
+              Export
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onActivate(set)}
+              disabled={set.status === "active" || activatePending}
+            >
+              <PlayIcon data-icon="inline-start" />
+              Activate
+            </Button>
+            <ConfirmAction
+              title="Archive challenge set"
+              description={`${set.name} will no longer be available for active play.`}
+              confirmLabel="Archive"
+              destructive
+              disabled={set.status === "archived" || archivePending}
+              onConfirm={() => onArchive(set)}
+            >
+              <Button size="sm" variant="destructive" disabled={set.status === "archived" || archivePending}>
+                <ArchiveIcon data-icon="inline-start" />
+                Archive
+              </Button>
+            </ConfirmAction>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <SetMetric label="Challenges" value={String(challenges.length)} />
+          <SetMetric label="Enabled" value={String(enabledCount)} />
+          <SetMetric label="Missing targets" value={String(missingTargetCount)} />
+          <SetMetric label="Total points" value={String(totalPoints)} />
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function SetMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border bg-muted/30 p-3">
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <div className="mt-1 text-2xl font-semibold tracking-tight">{value}</div>
+    </div>
+  )
+}
+
+function ChallengeListToolbar({
+  enabledFilter,
+  search,
+  canCreate,
+  onEnabledFilterChange,
+  onSearchChange,
+  onCreate,
+}: {
+  enabledFilter: EnabledFilter
+  search: string
+  canCreate: boolean
+  onEnabledFilterChange: (value: EnabledFilter) => void
+  onSearchChange: (value: string) => void
+  onCreate: () => void
+}) {
+  const enabledItems = [
+    { value: "all", label: "All challenges" },
+    { value: "enabled", label: "Enabled" },
+    { value: "disabled", label: "Disabled" },
+  ]
+
+  return (
+    <FieldGroup className="grid gap-3 sm:grid-cols-[10rem_minmax(12rem,1fr)_auto] lg:max-w-2xl">
+      <Field>
+        <FieldLabel>Status</FieldLabel>
+        <Select
+          items={enabledItems}
+          value={enabledFilter}
+          onValueChange={(value) => onEnabledFilterChange(String(value) as EnabledFilter)}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="all">All challenges</SelectItem>
+              <SelectItem value="enabled">Enabled</SelectItem>
+              <SelectItem value="disabled">Disabled</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field>
+        <FieldLabel htmlFor="challenge-search">Search</FieldLabel>
+        <Input
+          id="challenge-search"
+          value={search}
+          onChange={(event) => onSearchChange(event.target.value)}
+          placeholder="Slug or title"
+        />
+      </Field>
+      <Field className="justify-end">
+        <FieldLabel className="invisible">Create</FieldLabel>
+        <Button onClick={onCreate} disabled={!canCreate}>
+          <PlusIcon data-icon="inline-start" />
+          Challenge
+        </Button>
+      </Field>
+    </FieldGroup>
+  )
+}
+
 function ChallengesTable({
   challenges,
-  setsById,
   isLoading,
   error,
   reorderPending,
   disablePending,
-  hasSets,
+  canCreate,
+  canReorder,
   onCreate,
   onEdit,
   onImage,
@@ -934,12 +983,12 @@ function ChallengesTable({
   onRetry,
 }: {
   challenges: Challenge[]
-  setsById: Map<string, ChallengeSet>
   isLoading: boolean
   error: unknown
   reorderPending: boolean
   disablePending: boolean
-  hasSets: boolean
+  canCreate: boolean
+  canReorder: boolean
   onCreate: () => void
   onEdit: (challenge: Challenge) => void
   onImage: (challenge: Challenge) => void
@@ -985,11 +1034,13 @@ function ChallengesTable({
           <EmptyMedia variant="icon">
             <PlusIcon />
           </EmptyMedia>
-          <EmptyTitle>No challenges match</EmptyTitle>
-          <EmptyDescription>Create a challenge or change the current filters.</EmptyDescription>
+          <EmptyTitle>{canCreate ? "No challenges match" : "No challenge set selected"}</EmptyTitle>
+          <EmptyDescription>
+            {canCreate ? "Create a challenge or change the current filters." : "Select or create a set first."}
+          </EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
-          <Button onClick={onCreate} disabled={!hasSets}>
+          <Button onClick={onCreate} disabled={!canCreate}>
             <PlusIcon data-icon="inline-start" />
             Create challenge
           </Button>
@@ -1004,7 +1055,6 @@ function ChallengesTable({
         <TableRow>
           <TableHead>Order</TableHead>
           <TableHead>Challenge</TableHead>
-          <TableHead>Set</TableHead>
           <TableHead className="text-right">Points</TableHead>
           <TableHead>Pass</TableHead>
           <TableHead>Target</TableHead>
@@ -1022,7 +1072,6 @@ function ChallengesTable({
                 <span className="max-w-72 truncate text-xs text-muted-foreground">{challenge.slug}</span>
               </div>
             </TableCell>
-            <TableCell>{setLabel(setsById.get(challenge.challenge_set_id))}</TableCell>
             <TableCell className="text-right font-medium">{challenge.points}</TableCell>
             <TableCell>{formatPercent(challenge.pass_threshold)}</TableCell>
             <TableCell>
@@ -1043,7 +1092,7 @@ function ChallengesTable({
                   size="icon-sm"
                   variant="outline"
                   aria-label="Move challenge up"
-                  disabled={index === 0 || reorderPending}
+                  disabled={!canReorder || index === 0 || reorderPending}
                   onClick={() => onMove(index, -1)}
                 >
                   <ArrowUpIcon />
@@ -1052,7 +1101,7 @@ function ChallengesTable({
                   size="icon-sm"
                   variant="outline"
                   aria-label="Move challenge down"
-                  disabled={index === challenges.length - 1 || reorderPending}
+                  disabled={!canReorder || index === challenges.length - 1 || reorderPending}
                   onClick={() => onMove(index, 1)}
                 >
                   <ArrowDownIcon />
