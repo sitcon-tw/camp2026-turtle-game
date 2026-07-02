@@ -111,7 +111,7 @@ export function ChallengeRenderer({
           targetImageOpacity={targetImageOpacity}
           backgroundColor={canvas.background_color}
           className={cn("h-full w-full", canvasClassName)}
-          style={compact ? { width: "100%", height: "100%" } : undefined}
+          style={{ width: "100%", height: "100%" }}
         />
       ) : (
         <div className="flex h-full flex-col items-center justify-center gap-1 px-3 text-center text-xs text-muted-foreground">

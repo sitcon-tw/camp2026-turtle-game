@@ -62,6 +62,7 @@ export function TurtleCanvas({
     now: number
   } | null>(null)
   const [controlledStepProgress, setControlledStepProgress] = useState(1)
+  const [viewportSize, setViewportSize] = useState<{ width: number; height: number } | null>(null)
   const normalizedProgram = useMemo(() => normalizeTurtleProgram(program), [program])
   const normalizedTrace = useMemo(() => {
     const existingTrace = normalizeExecutionTrace(trace, normalizedProgram)
@@ -79,6 +80,8 @@ export function TurtleCanvas({
   const displayWidth = width ?? canvasSpec.width
   const displayHeight = height ?? canvasSpec.height
   const pixelRatio = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1
+  const bitmapWidth = Math.max(1, Math.round((viewportSize?.width ?? displayWidth) * pixelRatio))
+  const bitmapHeight = Math.max(1, Math.round((viewportSize?.height ?? displayHeight) * pixelRatio))
   const playbackId = `${animationKey ?? "default"}:${normalizedTrace?.steps.length ?? 0}`
   const autoStepIndex = animated && playbackState?.id === playbackId ? playbackState.stepIndex : -1
   const renderedStepIndex = currentStepIndex ?? (animated ? autoStepIndex : undefined)
@@ -88,6 +91,39 @@ export function TurtleCanvas({
       : 1
   const renderedStepProgress = currentStepIndex !== undefined ? (animated ? controlledStepProgress : 1) : autoStepProgress
   const targetImage = targetImageState && targetImageState.src === targetImageSrc ? targetImageState.image : null
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || typeof ResizeObserver === "undefined") return
+
+    let animationFrame = 0
+    const publishSize = (nextWidth: number, nextHeight: number) => {
+      if (nextWidth <= 0 || nextHeight <= 0) return
+
+      setViewportSize((current) =>
+        current && Math.abs(current.width - nextWidth) < 0.5 && Math.abs(current.height - nextHeight) < 0.5
+          ? current
+          : { width: nextWidth, height: nextHeight },
+      )
+    }
+    const measure = () => {
+      const rect = canvas.getBoundingClientRect()
+      publishSize(rect.width, rect.height)
+    }
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      const borderBox = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize
+      publishSize(borderBox?.inlineSize ?? entry.contentRect.width, borderBox?.blockSize ?? entry.contentRect.height)
+    })
+
+    observer.observe(canvas)
+    animationFrame = window.requestAnimationFrame(measure)
+
+    return () => {
+      observer.disconnect()
+      window.cancelAnimationFrame(animationFrame)
+    }
+  }, [])
 
   useEffect(() => {
     if (!targetImageSrc) return
@@ -204,6 +240,8 @@ export function TurtleCanvas({
     })
   }, [
     backgroundColor,
+    bitmapHeight,
+    bitmapWidth,
     canvasSpec,
     normalizedTrace,
     renderedStepIndex,
@@ -218,9 +256,10 @@ export function TurtleCanvas({
   return (
     <canvas
       ref={canvasRef}
+      data-slot="turtle-canvas"
       className={className}
-      width={Math.max(1, Math.round(displayWidth * pixelRatio))}
-      height={Math.max(1, Math.round(displayHeight * pixelRatio))}
+      width={bitmapWidth}
+      height={bitmapHeight}
       style={{
         display: "block",
         maxWidth: "100%",
