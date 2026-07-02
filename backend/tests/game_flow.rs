@@ -45,11 +45,12 @@ async fn admin_controls_full_round_and_teams_vote_to_score() {
             Method::POST,
             "/api/v1/game/rounds/current/submissions",
             Some(&token),
-            json!({ "block_program": { "team": index } }),
+            json!({ "block_program": valid_program(index) }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::CREATED);
         let body = response_json(response).await;
+        assert_eq!(body["submission"]["status"], "completed");
         submission_ids.push(body["submission"]["id"].clone());
     }
 
@@ -270,6 +271,27 @@ fn team_token(state: &AppState, team: &Team) -> String {
         &state.auth_secret,
     )
     .expect("team token")
+}
+
+fn valid_program(index: usize) -> Value {
+    json!({
+        "version": 1,
+        "canvas": {
+            "width": 32,
+            "height": 32
+        },
+        "start": {
+            "x": 4.0,
+            "y": 4.0 + index as f64,
+            "heading": 0.0,
+            "pen_down": true,
+            "stroke_color": "#000000",
+            "stroke_width": 1.0
+        },
+        "blocks": [
+            { "type": "forward", "id": format!("move-{index}"), "args": { "distance": 8.0 } }
+        ]
+    })
 }
 
 async fn get_request(app: axum::Router, path: &str, token: Option<&str>) -> Response {

@@ -14,7 +14,6 @@ use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
 use crate::{
     error::AppError,
-    models::{Submission, SubmissionStatus},
     routes::submissions::{LeaderboardEntry, leaderboard_entries},
     state::{AppEvent, AppState},
 };
@@ -28,9 +27,6 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Serialize)]
 struct BlackboardState {
     status: BlackboardStatus,
-    paused: bool,
-    queue_length: usize,
-    running: Vec<Submission>,
     leaderboard: Vec<LeaderboardEntry>,
 }
 
@@ -38,37 +34,15 @@ struct BlackboardState {
 #[serde(rename_all = "snake_case")]
 enum BlackboardStatus {
     Idle,
-    Running,
-    Paused,
 }
 
 async fn blackboard_state(
     State(state): State<AppState>,
 ) -> Result<Json<BlackboardState>, AppError> {
-    let paused = state.is_queue_paused()?;
-    let queue = state.repository.list_queued_running_submissions()?;
-    let queue_length = queue
-        .iter()
-        .filter(|submission| submission.status == SubmissionStatus::Queued)
-        .count();
-    let running: Vec<_> = queue
-        .into_iter()
-        .filter(|submission| submission.status == SubmissionStatus::Running)
-        .collect();
-    let status = if paused {
-        BlackboardStatus::Paused
-    } else if running.is_empty() {
-        BlackboardStatus::Idle
-    } else {
-        BlackboardStatus::Running
-    };
     let leaderboard = leaderboard_entries(state.repository.leaderboard()?);
 
     Ok(Json(BlackboardState {
-        status,
-        paused,
-        queue_length,
-        running,
+        status: BlackboardStatus::Idle,
         leaderboard,
     }))
 }

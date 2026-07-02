@@ -23,6 +23,7 @@ use crate::{
         Challenge, ChallengeId, GamePhase, GameStateView, PublicVote, PublicVoteChoice, Role,
         Round, RoundResultEntry, Submission, TeamId, TeamNomination, TeamSelectionVote,
     },
+    routes::submissions::judge_and_store_submission,
     state::{AppEvent, AppState, GameError, GameSnapshot, RateLimitStatus, StartRoundInput},
 };
 
@@ -266,9 +267,7 @@ async fn create_current_round_submission(
         .game
         .attach_submission(&submission)
         .map_err(game_error)?;
-    state.event_bus.publish(AppEvent::SubmissionUpdated {
-        submission_id: submission.id,
-    });
+    let submission = judge_and_store_submission(&state, submission).await?;
     state.event_bus.publish(AppEvent::RoundUpdated {
         round_id: view
             .current_round_id
