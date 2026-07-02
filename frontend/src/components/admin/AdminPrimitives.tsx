@@ -38,12 +38,12 @@ const statusTone: Record<string, StatusTone> = {
   running: "info",
 }
 
-const toneClassName: Record<StatusTone, string> = {
-  danger: "border-destructive/20 bg-destructive/10 text-destructive",
-  info: "border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300",
-  neutral: "border-border bg-muted text-muted-foreground",
-  success: "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-  warning: "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+const toneVariant: Record<StatusTone, React.ComponentProps<typeof Badge>["variant"]> = {
+  danger: "destructive",
+  info: "secondary",
+  neutral: "outline",
+  success: "secondary",
+  warning: "outline",
 }
 
 function humanizeStatus(status: string | boolean | null | undefined) {
@@ -70,7 +70,7 @@ export function StatusBadge({
   const resolvedTone = toneForStatus(status, tone)
 
   return (
-    <Badge variant="outline" className={cn("capitalize", toneClassName[resolvedTone], className)}>
+    <Badge variant={toneVariant[resolvedTone]} className={cn("capitalize", className)}>
       {humanizeStatus(status)}
     </Badge>
   )
@@ -247,11 +247,11 @@ export function TableShell({
 export function AdminHealthPill({ ok }: { ok: boolean | null }) {
   if (ok === null) return <StatusBadge status="unknown" tone="neutral" />
   return ok ? (
-    <Badge variant="outline" className={toneClassName.success}>
+    <Badge variant="secondary">
       <CheckCircle2Icon /> Online
     </Badge>
   ) : (
-    <Badge variant="outline" className={toneClassName.danger}>
+    <Badge variant="destructive">
       <AlertTriangleIcon /> Offline
     </Badge>
   )
