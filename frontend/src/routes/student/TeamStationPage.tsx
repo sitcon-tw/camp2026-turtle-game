@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import type { ReactNode } from "react"
 import type { Workspace } from "blockly/core"
 import { BlocklyWorkspace } from "react-blockly"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -446,6 +447,45 @@ function MySubmissionList({
   )
 }
 
+function VotingSubmissionCard({
+  submission,
+  title,
+  sourceLabel,
+  actionLabel,
+  actionIcon,
+  actionVariant,
+  actionDisabled,
+  onAction,
+}: {
+  submission: GameSubmission
+  title: string
+  sourceLabel: string
+  actionLabel: string
+  actionIcon: ReactNode
+  actionVariant: "outline" | "secondary"
+  actionDisabled: boolean
+  onAction: () => void
+}) {
+  return (
+    <div className="grid gap-3 rounded-md border p-3">
+      <TurtlePreviewPanel
+        program={submission.block_program}
+        trace={submission.trace}
+        resultImageUrl={submission.result_image_url}
+        title={title}
+        sourceLabel={sourceLabel}
+        viewportClassName="aspect-square h-auto"
+        showTarget={false}
+        showTurtle={false}
+      />
+      <Button variant={actionVariant} disabled={actionDisabled} onClick={onAction}>
+        {actionIcon}
+        {actionLabel}
+      </Button>
+    </div>
+  )
+}
+
 function TeamSelectionPanel({
   submissions,
   selectedSubmissionId,
@@ -475,27 +515,17 @@ function TeamSelectionPanel({
           </div>
         ) : (
           submissions.map((submission) => (
-            <div key={submission.id} className="grid gap-3 rounded-md border p-3">
-              <TurtlePreviewPanel
-                program={submission.block_program}
-                trace={submission.trace}
-                resultImageUrl={submission.result_image_url}
-                title={`#${submission.id.slice(0, 8)}`}
-                sourceLabel={formatSubmissionStatus(submission)}
-                className="h-64"
-                viewportClassName="h-[calc(100%-4.5rem)]"
-                showTarget={false}
-                showTurtle={false}
-              />
-              <Button
-                variant={selectedSubmissionId === submission.id ? "secondary" : "outline"}
-                disabled={isSaving}
-                onClick={() => onSelect(submission.id)}
-              >
-                {selectedSubmissionId === submission.id ? <CheckIcon data-icon="inline-start" /> : <VoteIcon data-icon="inline-start" />}
-                {selectedSubmissionId === submission.id ? "已選取" : "選為代表"}
-              </Button>
-            </div>
+            <VotingSubmissionCard
+              key={submission.id}
+              submission={submission}
+              title={`#${submission.id.slice(0, 8)}`}
+              sourceLabel={formatSubmissionStatus(submission)}
+              actionLabel={selectedSubmissionId === submission.id ? "已選取" : "選為代表"}
+              actionIcon={selectedSubmissionId === submission.id ? <CheckIcon data-icon="inline-start" /> : <VoteIcon data-icon="inline-start" />}
+              actionVariant={selectedSubmissionId === submission.id ? "secondary" : "outline"}
+              actionDisabled={isSaving}
+              onAction={() => onSelect(submission.id)}
+            />
           ))
         )}
       </CardContent>
@@ -564,27 +594,17 @@ function PublicVotingPanel({
             const selected = draft.find((vote) => vote.target_submission_id === submission.id)
             const disabled = submission.team_id === myTeamId
             return (
-              <div key={nomination.team_id} className="grid gap-3 rounded-md border p-3">
-                <TurtlePreviewPanel
-                  program={submission.block_program}
-                  trace={submission.trace}
-                  resultImageUrl={submission.result_image_url}
-                  title={teamNameById.get(nomination.team_id) ?? `Team ${nomination.team_id.slice(0, 6)}`}
-                  sourceLabel={`${votes} 票`}
-                  className="h-72"
-                  viewportClassName="h-[calc(100%-4.5rem)]"
-                  showTarget={false}
-                  showTurtle={false}
-                />
-                <Button
-                  variant={selected ? "secondary" : "outline"}
-                  disabled={disabled || isSaving}
-                  onClick={() => onToggle(submission)}
-                >
-                  {selected ? <CheckIcon data-icon="inline-start" /> : <VoteIcon data-icon="inline-start" />}
-                  {disabled ? "本隊作品" : selected ? `第 ${selected.rank} 順位` : "加入投票"}
-                </Button>
-              </div>
+              <VotingSubmissionCard
+                key={nomination.team_id}
+                submission={submission}
+                title={teamNameById.get(nomination.team_id) ?? `Team ${nomination.team_id.slice(0, 6)}`}
+                sourceLabel={`${votes} 票`}
+                actionLabel={disabled ? "本隊作品" : selected ? `第 ${selected.rank} 順位` : "加入投票"}
+                actionIcon={selected ? <CheckIcon data-icon="inline-start" /> : <VoteIcon data-icon="inline-start" />}
+                actionVariant={selected ? "secondary" : "outline"}
+                actionDisabled={disabled || isSaving}
+                onAction={() => onToggle(submission)}
+              />
             )
           })
         )}
