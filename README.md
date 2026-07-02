@@ -16,6 +16,13 @@ Install dependencies:
 make install
 ```
 
+Create local environment files:
+
+```bash
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
+```
+
 Start the backend and frontend together:
 
 ```bash
