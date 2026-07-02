@@ -119,15 +119,20 @@ async fn import_challenge_set(
     let challenge_count = imported.manifest.challenges.len();
 
     for manifest_challenge in imported.manifest.challenges {
-        let image = imported
-            .images
-            .get(&manifest_challenge.target_image_path)
-            .ok_or_else(|| AppError::bad_request("challenge image is missing"))?;
-        let asset_id = imported_asset_id();
-        state
-            .asset_storage
-            .put_asset(&asset_id, image.content_type, image.bytes.clone())
-            .map_err(store_error)?;
+        let target = if let Some(target_image_path) = manifest_challenge.target_image_path {
+            let image = imported
+                .images
+                .get(&target_image_path)
+                .ok_or_else(|| AppError::bad_request("challenge image is missing"))?;
+            let asset_id = imported_asset_id();
+            state
+                .asset_storage
+                .put_asset(&asset_id, image.content_type, image.bytes.clone())
+                .map_err(store_error)?;
+            (Some(asset_id), Some(target_image_path))
+        } else {
+            (None, None)
+        };
         state
             .repository
             .create_challenge(NewChallenge {
@@ -135,11 +140,10 @@ async fn import_challenge_set(
                 slug: manifest_challenge.slug,
                 title: manifest_challenge.title,
                 description: manifest_challenge.description,
-                target_image_asset_id: Some(asset_id),
-                target_image_path: Some(manifest_challenge.target_image_path),
+                target_image_asset_id: target.0,
+                target_image_path: target.1,
                 target_image_url: None,
                 points: manifest_challenge.points,
-                pass_threshold: manifest_challenge.pass_threshold,
                 enabled: manifest_challenge.enabled,
                 order: manifest_challenge.order,
                 canvas: manifest_challenge.canvas,
@@ -421,7 +425,6 @@ struct AdminChallengeResponse {
 struct ChallengeStatsResponse {
     submission_count: usize,
     solved_count: usize,
-    best_similarity: Option<f64>,
 }
 
 impl From<ChallengeStats> for ChallengeStatsResponse {
@@ -429,7 +432,6 @@ impl From<ChallengeStats> for ChallengeStatsResponse {
         Self {
             submission_count: stats.submission_count,
             solved_count: stats.solved_count,
-            best_similarity: stats.best_similarity,
         }
     }
 }
@@ -441,7 +443,6 @@ struct CreateChallengeRequest {
     #[serde(default)]
     description: String,
     points: i32,
-    pass_threshold: f64,
     #[serde(default = "default_enabled")]
     enabled: bool,
     #[serde(default)]
@@ -460,7 +461,6 @@ impl CreateChallengeRequest {
         let slug = non_empty_trimmed(self.slug, "slug")?;
         let title = non_empty_trimmed(self.title, "title")?;
         validate_points(self.points)?;
-        validate_pass_threshold(self.pass_threshold)?;
         Ok(NewChallenge {
             challenge_set_id,
             slug,
@@ -470,7 +470,6 @@ impl CreateChallengeRequest {
             target_image_path: None,
             target_image_url: None,
             points: self.points,
-            pass_threshold: self.pass_threshold,
             enabled: self.enabled,
             order: self.order,
             canvas: self.canvas,
@@ -484,7 +483,6 @@ struct ChallengePatchRequest {
     title: Option<String>,
     description: Option<String>,
     points: Option<i32>,
-    pass_threshold: Option<f64>,
     enabled: Option<bool>,
     order: Option<i32>,
 }
@@ -498,12 +496,6 @@ impl ChallengePatchRequest {
         {
             return Err(AppError::bad_request("title cannot be empty"));
         }
-        if self
-            .pass_threshold
-            .is_some_and(|threshold| !threshold.is_finite())
-        {
-            return Err(AppError::bad_request("pass_threshold must be finite"));
-        }
         if self.points.is_some_and(|points| points < 0) {
             return Err(AppError::bad_request("points must not be negative"));
         }
@@ -515,7 +507,6 @@ impl ChallengePatchRequest {
             title: self.title,
             description: self.description,
             points: self.points,
-            pass_threshold: self.pass_threshold,
             enabled: self.enabled,
             order: self.order,
         }
@@ -641,13 +632,6 @@ fn non_empty_trimmed(value: String, field_name: &str) -> Result<String, AppError
 fn validate_points(points: i32) -> Result<(), AppError> {
     if points < 0 {
         return Err(AppError::bad_request("points must not be negative"));
-    }
-    Ok(())
-}
-
-fn validate_pass_threshold(pass_threshold: f64) -> Result<(), AppError> {
-    if !pass_threshold.is_finite() {
-        return Err(AppError::bad_request("pass_threshold must be finite"));
     }
     Ok(())
 }

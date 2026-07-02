@@ -1,4 +1,4 @@
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom"
+import { Link, Outlet, useNavigate } from "react-router-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { LogOutIcon, TurtleIcon } from "lucide-react"
 
@@ -35,24 +35,19 @@ export default function StudentLayout() {
   }
 
   return (
-    <main className="min-h-svh bg-[linear-gradient(180deg,hsl(var(--background)),hsl(var(--muted)))]">
+    <main className="min-h-svh bg-background">
       <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
-          <Link to="/challenges" className="flex items-center gap-3 font-semibold">
+          <Link to="/play" className="flex items-center gap-3 font-semibold">
             <span className="flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
               <TurtleIcon className="size-5" />
             </span>
-            <span>Turtle Challenge</span>
+            <span>Turtle Game</span>
           </Link>
-          <nav className="hidden items-center gap-1 sm:flex">
-            <Button variant="ghost" nativeButton={false} render={<NavLink to="/challenges" />}>
-              挑戰列表
-            </Button>
-          </nav>
           <div className="flex items-center gap-3">
             <div className="hidden text-right text-sm sm:block">
               <p className="font-medium">{teamLabel}</p>
-              <p className="text-xs text-muted-foreground">學生端</p>
+              <p className="text-xs text-muted-foreground">Team Station</p>
             </div>
             <Button variant="outline" size="sm" onClick={logout}>
               <LogOutIcon /> 登出

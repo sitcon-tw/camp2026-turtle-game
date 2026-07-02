@@ -14,7 +14,8 @@ use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
 use crate::{
     error::AppError,
-    models::{Submission, SubmissionStatus},
+    models::TeamId,
+    routes::game::GameStateResponse,
     routes::submissions::{LeaderboardEntry, leaderboard_entries},
     state::{AppEvent, AppState},
 };
@@ -28,47 +29,50 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Serialize)]
 struct BlackboardState {
     status: BlackboardStatus,
-    paused: bool,
-    queue_length: usize,
-    running: Vec<Submission>,
+    game: GameStateResponse,
+    teams: Vec<BlackboardTeam>,
     leaderboard: Vec<LeaderboardEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct BlackboardTeam {
+    id: TeamId,
+    name: String,
+    enabled: bool,
+    total_score: i32,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum BlackboardStatus {
     Idle,
-    Running,
-    Paused,
 }
 
 async fn blackboard_state(
     State(state): State<AppState>,
 ) -> Result<Json<BlackboardState>, AppError> {
-    let paused = state.is_queue_paused()?;
-    let queue = state.repository.list_queued_running_submissions()?;
-    let queue_length = queue
-        .iter()
-        .filter(|submission| submission.status == SubmissionStatus::Queued)
-        .count();
-    let running: Vec<_> = queue
-        .into_iter()
-        .filter(|submission| submission.status == SubmissionStatus::Running)
-        .collect();
-    let status = if paused {
-        BlackboardStatus::Paused
-    } else if running.is_empty() {
-        BlackboardStatus::Idle
-    } else {
-        BlackboardStatus::Running
-    };
     let leaderboard = leaderboard_entries(state.repository.leaderboard()?);
+    let teams = state
+        .repository
+        .list_teams()?
+        .into_iter()
+        .map(|team| BlackboardTeam {
+            id: team.id,
+            name: team.name,
+            enabled: team.enabled,
+            total_score: team.total_score,
+        })
+        .collect();
+    let game = state
+        .game
+        .snapshot(state.repository.as_ref(), None)
+        .map_err(|error| AppError::internal(format!("game snapshot is unavailable: {error}")))?
+        .into();
 
     Ok(Json(BlackboardState {
-        status,
-        paused,
-        queue_length,
-        running,
+        status: BlackboardStatus::Idle,
+        game,
+        teams,
         leaderboard,
     }))
 }

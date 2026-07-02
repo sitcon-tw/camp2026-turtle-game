@@ -81,9 +81,6 @@ struct TeamChallengeResponse {
     challenge: Challenge,
     status: ChallengeProgressStatus,
     submission_count: usize,
-    best_similarity: Option<f64>,
-    best_submission_id: Option<crate::models::SubmissionId>,
-    awarded_points: Option<i32>,
 }
 
 impl TeamChallengeResponse {
@@ -92,9 +89,6 @@ impl TeamChallengeResponse {
             challenge,
             status: progress.status,
             submission_count: progress.submission_count,
-            best_similarity: progress.best_similarity,
-            best_submission_id: progress.best_submission_id,
-            awarded_points: progress.awarded_points,
         }
     }
 }

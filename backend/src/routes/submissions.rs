@@ -1,4 +1,4 @@
-use std::{collections::HashMap, convert::Infallible, time::Duration};
+use std::{collections::HashMap, convert::Infallible};
 
 use axum::{
     Json, Router,
@@ -13,24 +13,19 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::time::sleep;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use uuid::Uuid;
 
 use crate::{
     auth::AuthenticatedUser,
-    engine::{
-        BlockProgram, EngineError, interpret_program, pixel_similarity_png_bytes,
-        render_program_png,
-    },
+    engine::{BlockProgram, EngineError, interpret_program, render_program_png},
     error::AppError,
     models::{
-        Challenge, ChallengeId, Role, ScoreEvent, ScoreEventType, Submission, SubmissionId,
-        SubmissionStatus, TeamId, Timestamp,
+        ChallengeId, Role, ScoreEvent, ScoreEventType, Submission, SubmissionId, TeamId, Timestamp,
     },
     state::{
-        AppEvent, AppState, CompletedSubmission, RateLimitStatus, ScoreEventInput,
-        ScoreEventListFilter, SubmissionListFilter,
+        AppEvent, AppState, CompletedSubmission, RateLimitStatus, ScoreEventListFilter,
+        SubmissionListFilter,
     },
 };
 
@@ -44,7 +39,6 @@ pub fn router() -> Router<AppState> {
             post(create_submission).get(list_my_challenge_submissions),
         )
         .route("/submissions/{submission_id}", get(get_my_submission))
-        .route("/queue/me", get(my_queue))
         .route("/leaderboard", get(leaderboard))
         .route("/leaderboard/events", get(leaderboard_events))
         .route("/events/team", get(team_events))
@@ -60,7 +54,6 @@ struct SubmitRequest {
 #[derive(Debug, Serialize)]
 struct SubmissionCreatedResponse {
     submission: Submission,
-    position: Option<usize>,
 }
 
 async fn create_submission(
@@ -110,17 +103,11 @@ async fn create_submission(
         state
             .repository
             .create_submission(team_id, challenge_id, block_program, None)?;
-    let position = state.repository.queue_position(submission.id)?;
-    state.event_bus.publish(AppEvent::SubmissionUpdated {
-        submission_id: submission.id,
-    });
+    let submission = judge_and_store_submission(&state, submission).await?;
 
     Ok((
         StatusCode::CREATED,
-        Json(SubmissionCreatedResponse {
-            submission,
-            position,
-        }),
+        Json(SubmissionCreatedResponse { submission }),
     ))
 }
 
@@ -152,55 +139,6 @@ async fn get_my_submission(
         return Err(AppError::forbidden("submission belongs to another team"));
     }
     Ok(Json(submission))
-}
-
-#[derive(Debug, Serialize)]
-struct QueueEntry {
-    submission: Submission,
-    position: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct MyQueueResponse {
-    paused: bool,
-    queued_submissions: Vec<QueueEntry>,
-    running_submission: Option<QueueEntry>,
-}
-
-async fn my_queue(
-    State(state): State<AppState>,
-    user: AuthenticatedUser,
-) -> Result<Json<MyQueueResponse>, AppError> {
-    let team_id = require_team(&user)?;
-    let paused = state.is_queue_paused()?;
-    let mut queued_submissions = Vec::new();
-    let mut running_submission = None;
-    for (index, submission) in state
-        .repository
-        .list_queued_running_submissions()?
-        .into_iter()
-        .enumerate()
-    {
-        if submission.team_id != team_id {
-            continue;
-        }
-        let entry = QueueEntry {
-            position: index.saturating_add(1),
-            submission,
-        };
-        match entry.submission.status {
-            SubmissionStatus::Queued => queued_submissions.push(entry),
-            SubmissionStatus::Running => running_submission = Some(entry),
-            SubmissionStatus::Completed
-            | SubmissionStatus::Failed
-            | SubmissionStatus::Cancelled => {}
-        }
-    }
-    Ok(Json(MyQueueResponse {
-        paused,
-        queued_submissions,
-        running_submission,
-    }))
 }
 
 #[derive(Debug, Serialize)]
@@ -379,21 +317,11 @@ async fn result_asset(
     asset_response(RESULT_CONTENT_TYPE.to_owned(), asset.bytes)
 }
 
-pub async fn judge_next_submission_once(state: AppState) -> Result<Option<Submission>, AppError> {
-    let _judge_guard = state.judge_lock.lock().await;
-
-    if state.is_queue_paused()? {
-        return Ok(None);
-    }
-
-    let Some(submission) = state.repository.pop_next_queued_submission()? else {
-        return Ok(None);
-    };
-    state.event_bus.publish(AppEvent::SubmissionUpdated {
-        submission_id: submission.id,
-    });
-
-    let result = judge_submission(&state, &submission).await;
+pub(crate) async fn judge_and_store_submission(
+    state: &AppState,
+    submission: Submission,
+) -> Result<Submission, AppError> {
+    let result = judge_submission(state, &submission).await;
     match result {
         Ok(result) => {
             let completed = state
@@ -402,7 +330,7 @@ pub async fn judge_next_submission_once(state: AppState) -> Result<Option<Submis
             state.event_bus.publish(AppEvent::SubmissionUpdated {
                 submission_id: completed.id,
             });
-            Ok(Some(completed))
+            Ok(completed)
         }
         Err(error_message) => {
             let failed = state
@@ -411,7 +339,7 @@ pub async fn judge_next_submission_once(state: AppState) -> Result<Option<Submis
             state.event_bus.publish(AppEvent::SubmissionUpdated {
                 submission_id: failed.id,
             });
-            Ok(Some(failed))
+            Ok(failed)
         }
     }
 }
@@ -420,54 +348,22 @@ async fn judge_submission(
     state: &AppState,
     submission: &Submission,
 ) -> Result<CompletedSubmission, String> {
-    let challenge = state
-        .repository
-        .get_challenge(submission.challenge_id)
-        .map_err(public_store_error)?
-        .ok_or_else(|| "challenge was not found".to_owned())?;
     let program: BlockProgram = serde_json::from_value(submission.block_program.clone())
         .map_err(|error| format_engine_error(EngineError::InvalidJson(error)))?;
     program.validate().map_err(format_engine_error)?;
     let trace = interpret_program(&program).map_err(format_engine_error)?;
     play_trace_for_blackboard(state, submission, &program, &trace).await;
     let png = render_program_png(&program).map_err(format_engine_error)?;
-    let similarity = similarity_for_challenge(state, &challenge, &png).map_err(public_app_error)?;
-    let passed = similarity >= challenge.pass_threshold;
     let asset_id = format!("results/{}.png", submission.id.as_uuid());
     let result_url = format!("/api/v1/assets/results/{}.png", submission.id.as_uuid());
     state
         .asset_storage
         .put_asset(asset_id.clone(), RESULT_CONTENT_TYPE, png)
         .map_err(public_store_error)?;
-    let awarded_points = if passed {
-        match state
-            .repository
-            .append_score_event(ScoreEventInput::challenge_pass(
-                submission.team_id,
-                submission.challenge_id,
-                submission.id,
-                challenge.points,
-            )) {
-            Ok(event) => {
-                state.event_bus.publish(AppEvent::ScoreRecorded {
-                    score_event: event.clone(),
-                });
-                event.delta
-            }
-            Err(crate::state::StoreError::DuplicateChallengePass) => 0,
-            Err(error) => return Err(public_store_error(error)),
-        }
-    } else {
-        0
-    };
     let trace = serde_json::to_value(trace).map_err(|error| error.to_string())?;
 
     Ok(CompletedSubmission {
         trace: Some(trace),
-        similarity: Some(similarity),
-        passed,
-        judge_score: Some(similarity),
-        awarded_points,
         result_image_asset_id: Some(asset_id),
         result_image_path: None,
         result_image_url: Some(result_url),
@@ -490,7 +386,7 @@ async fn play_trace_for_blackboard(
     });
 
     for step in &trace.steps {
-        let receiver_count = state.event_bus.publish(AppEvent::JudgingStep {
+        state.event_bus.publish(AppEvent::JudgingStep {
             submission_id: submission.id,
             team_id: submission.team_id,
             challenge_id: submission.challenge_id,
@@ -499,10 +395,6 @@ async fn play_trace_for_blackboard(
             step: step.clone(),
             playback_ms: TRACE_STEP_PLAYBACK_MS,
         });
-
-        if receiver_count > 0 {
-            sleep(Duration::from_millis(TRACE_STEP_PLAYBACK_MS)).await;
-        }
     }
 
     state.event_bus.publish(AppEvent::JudgingCompleted {
@@ -510,20 +402,6 @@ async fn play_trace_for_blackboard(
         team_id: submission.team_id,
         challenge_id: submission.challenge_id,
     });
-}
-
-fn similarity_for_challenge(
-    state: &AppState,
-    challenge: &Challenge,
-    result_png: &[u8],
-) -> Result<f64, AppError> {
-    let Some(asset_id) = &challenge.target_image_asset_id else {
-        return Ok(1.0);
-    };
-    let Some(asset) = state.asset_storage.get_asset(asset_id)? else {
-        return Ok(1.0);
-    };
-    pixel_similarity_png_bytes(&asset.bytes, result_png).map_err(engine_app_error)
 }
 
 fn validated_program_value(value: Value) -> Result<Value, AppError> {
@@ -549,6 +427,7 @@ fn event_visible_to_team(state: &AppState, team_id: TeamId, event: &AppEvent) ->
             .ok()
             .flatten()
             .is_some_and(|submission| submission.team_id == team_id),
+        AppEvent::GameStateChanged { .. } | AppEvent::RoundUpdated { .. } => true,
         AppEvent::JudgingStarted {
             submission_id,
             team_id: event_team_id,
@@ -615,8 +494,4 @@ fn format_engine_error(error: EngineError) -> String {
 
 fn public_store_error(error: crate::state::StoreError) -> String {
     error.to_string()
-}
-
-fn public_app_error(error: AppError) -> String {
-    format!("{error:?}")
 }

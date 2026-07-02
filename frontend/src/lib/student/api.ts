@@ -1,11 +1,7 @@
 import { clearTeamToken, getTeamToken } from "@/lib/student/session"
+import type { GameStateResponse, GameSubmission, LeaderboardResponse, PublicVoteChoice } from "@/lib/game/types"
 import type {
   ApiErrorBody,
-  Challenge,
-  LeaderboardResponse,
-  MyQueueResponse,
-  Submission,
-  SubmissionCreatedResponse,
   Team,
   TeamLoginResponse,
 } from "@/lib/student/types"
@@ -76,31 +72,38 @@ export const studentApi = {
   me() {
     return request<Team>("/api/v1/me")
   },
-  challenges() {
-    return request<Challenge[]>("/api/v1/challenges")
+  leaderboard() {
+    return request<LeaderboardResponse>("/api/v1/leaderboard", { auth: false })
   },
-  challenge(id: string) {
-    return request<Challenge>(`/api/v1/challenges/${id}`)
+  gameState() {
+    return request<GameStateResponse>("/api/v1/game/state")
   },
-  createSubmission(challengeId: string, blockProgram: unknown) {
-    return request<SubmissionCreatedResponse>(`/api/v1/challenges/${challengeId}/submissions`, {
+  createCurrentRoundSubmission(blockProgram: unknown) {
+    return request<{ submission: GameSubmission }>("/api/v1/game/rounds/current/submissions", {
       method: "POST",
       body: jsonBody({ block_program: blockProgram }),
     })
   },
-  challengeSubmissions(challengeId: string) {
-    return request<Submission[]>(`/api/v1/challenges/${challengeId}/submissions`)
+  recordTeamSelectionVote(submissionId: string, deviceId: string) {
+    return request<TeamSelectionVoteResponse>("/api/v1/game/rounds/current/team-selection-votes", {
+      method: "POST",
+      headers: { "x-device-id": deviceId },
+      body: jsonBody({ submission_id: submissionId }),
+    })
   },
-  myQueue() {
-    return request<MyQueueResponse>("/api/v1/queue/me")
-  },
-  submission(id: string) {
-    return request<Submission>(`/api/v1/submissions/${id}`)
-  },
-  leaderboard() {
-    return request<LeaderboardResponse>("/api/v1/leaderboard", { auth: false })
+  recordPublicVote(votes: PublicVoteChoice[]) {
+    return request<PublicVoteResponse>("/api/v1/game/rounds/current/public-votes", {
+      method: "POST",
+      body: jsonBody({ votes }),
+    })
   },
 }
+
+type TeamSelectionVoteResponse = GameStateResponse["my_team_selection_vote"] extends infer Vote
+  ? NonNullable<Vote>
+  : never
+
+type PublicVoteResponse = GameStateResponse["my_public_vote"] extends infer Vote ? NonNullable<Vote> : never
 
 export function studentErrorMessage(error: unknown) {
   if (error instanceof StudentApiError) {

@@ -44,6 +44,7 @@ uuid_id!(ChallengeSetId);
 uuid_id!(ChallengeId);
 uuid_id!(SubmissionId);
 uuid_id!(ScoreEventId);
+uuid_id!(RoundId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,6 +80,8 @@ pub enum ScoreEventType {
     AdminSet,
     AdminAdjust,
     Recalculation,
+    RoundPlacement,
+    RoundStreakBonus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +90,89 @@ pub enum ChallengeProgressStatus {
     NotStarted,
     Attempted,
     Solved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GamePhase {
+    Idle,
+    SubmissionOpen,
+    TeamSelection,
+    PublicVoting,
+    Scoring,
+    RoundComplete,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameStateView {
+    pub version: i64,
+    pub phase: GamePhase,
+    pub current_round_id: Option<RoundId>,
+    pub current_challenge_id: Option<ChallengeId>,
+    pub phase_started_at: Timestamp,
+    pub phase_ends_at: Option<Timestamp>,
+    pub public_votes_per_team: u8,
+    pub team_selection_seconds: i64,
+    pub updated_at: Timestamp,
+    pub updated_by: Option<String>,
+    pub server_now: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Round {
+    pub id: RoundId,
+    pub challenge_id: ChallengeId,
+    pub started_at: Timestamp,
+    pub submission_ends_at: Timestamp,
+    pub team_selection_ends_at: Option<Timestamp>,
+    pub public_voting_ends_at: Option<Timestamp>,
+    pub completed_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamSelectionVote {
+    pub round_id: RoundId,
+    pub team_id: TeamId,
+    pub device_id: String,
+    pub submission_id: SubmissionId,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamNomination {
+    pub round_id: RoundId,
+    pub team_id: TeamId,
+    pub submission_id: SubmissionId,
+    pub vote_count: usize,
+    pub selected_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicVoteChoice {
+    pub target_team_id: TeamId,
+    pub target_submission_id: SubmissionId,
+    pub rank: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicVote {
+    pub round_id: RoundId,
+    pub voter_team_id: TeamId,
+    pub choices: Vec<PublicVoteChoice>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoundResultEntry {
+    pub rank: usize,
+    pub team_id: TeamId,
+    pub submission_id: SubmissionId,
+    pub vote_count: usize,
+    pub placement_points: i32,
+    pub streak: u32,
+    pub streak_bonus: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -122,7 +208,6 @@ pub struct Challenge {
     pub target_image_path: Option<String>,
     pub target_image_url: Option<String>,
     pub points: i32,
-    pub pass_threshold: f64,
     pub enabled: bool,
     pub order: i32,
     pub canvas: CanvasConfig,
@@ -145,10 +230,6 @@ pub struct Submission {
     pub result_image_path: Option<String>,
     pub result_image_url: Option<String>,
     pub trace: Option<Value>,
-    pub similarity: Option<f64>,
-    pub passed: Option<bool>,
-    pub judge_score: Option<f64>,
-    pub awarded_points: Option<i32>,
     pub error_message: Option<String>,
     pub retry_of: Option<SubmissionId>,
     pub created_at: Timestamp,

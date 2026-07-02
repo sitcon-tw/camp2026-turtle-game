@@ -7,22 +7,16 @@ use axum::{
 use backend::{
     auth::issue_token,
     config::Config,
-    models::{CanvasConfig, Challenge, ChallengeSetStatus, Role, SubmissionStatus, Team},
+    models::{CanvasConfig, Challenge, ChallengeSetStatus, Role, Team},
     router,
-    routes::submissions::judge_next_submission_once,
     state::{AppState, NewChallenge},
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
 #[tokio::test]
-async fn submit_rejects_invalid_program_and_reports_queue_position() {
+async fn submit_rejects_invalid_program_and_immediately_completes_submission() {
     let fixture = Fixture::new();
-    let second_team = fixture
-        .state
-        .repository
-        .create_team("Second Team", "SECOND", None)
-        .expect("team should create");
     let app = router(fixture.state.clone());
 
     let invalid_response = app
@@ -61,45 +55,9 @@ async fn submit_rejects_invalid_program_and_reports_queue_position() {
         .expect("request should complete");
     assert_eq!(first_response.status(), StatusCode::CREATED);
     let first_body = response_json(first_response).await;
-    assert_eq!(first_body["position"], 1);
-
-    let second_token = team_token(&fixture.state, &second_team);
-    let second_response = app
-        .clone()
-        .oneshot(
-            json_request(
-                "POST",
-                &format!(
-                    "/api/v1/challenges/{}/submissions",
-                    fixture.challenge.id.as_uuid()
-                ),
-                Some(&second_token),
-                json!({ "block_program": valid_program() }),
-            )
-            .expect("request should build"),
-        )
-        .await
-        .expect("request should complete");
-    assert_eq!(second_response.status(), StatusCode::CREATED);
-    let second_body = response_json(second_response).await;
-    assert_eq!(second_body["position"], 2);
-
-    let queue_response = app
-        .clone()
-        .oneshot(
-            get_request("/api/v1/queue/me", Some(&second_token)).expect("request should build"),
-        )
-        .await
-        .expect("request should complete");
-    assert_eq!(queue_response.status(), StatusCode::OK);
-    let queue_body = response_json(queue_response).await;
-    assert_eq!(queue_body["paused"], false);
-    assert_eq!(queue_body["running_submission"], Value::Null);
-    assert_eq!(queue_body["queued_submissions"][0]["position"], 2);
-    assert_eq!(
-        queue_body["queued_submissions"][0]["submission"]["id"],
-        second_body["submission"]["id"]
-    );
+    assert!(first_body.get("position").is_none());
+    assert_eq!(first_body["submission"]["status"], "completed");
+    assert!(first_body["submission"]["result_image_url"].is_string());
 
     let list_response = app
         .oneshot(
@@ -120,36 +78,51 @@ async fn submit_rejects_invalid_program_and_reports_queue_position() {
 }
 
 #[tokio::test]
-async fn judge_completion_awards_points_once_and_leaderboard_reflects_score() {
+async fn submit_completion_does_not_award_points_or_change_leaderboard() {
     let fixture = Fixture::new();
-    let first_submission = fixture
-        .state
-        .repository
-        .create_submission(fixture.team.id, fixture.challenge.id, valid_program(), None)
-        .expect("submission should create");
-    let second_submission = fixture
-        .state
-        .repository
-        .create_submission(fixture.team.id, fixture.challenge.id, valid_program(), None)
-        .expect("submission should create");
+    let app = router(fixture.state.clone());
 
-    let completed = judge_next_submission_once(fixture.state.clone())
+    let first_response = app
+        .clone()
+        .oneshot(
+            json_request(
+                "POST",
+                &format!(
+                    "/api/v1/challenges/{}/submissions",
+                    fixture.challenge.id.as_uuid()
+                ),
+                Some(&fixture.team_token),
+                json!({ "block_program": valid_program() }),
+            )
+            .expect("request should build"),
+        )
         .await
-        .expect("judge should run")
-        .expect("submission should be judged");
-    assert_eq!(completed.id, first_submission.id);
-    assert_eq!(completed.status, SubmissionStatus::Completed);
-    assert_eq!(completed.passed, Some(true));
-    assert_eq!(completed.awarded_points, Some(fixture.challenge.points));
+        .expect("request should complete");
+    assert_eq!(first_response.status(), StatusCode::CREATED);
+    let first_body = response_json(first_response).await;
+    assert_eq!(first_body["submission"]["status"], "completed");
 
-    let duplicate = judge_next_submission_once(fixture.state.clone())
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let second_response = app
+        .clone()
+        .oneshot(
+            json_request(
+                "POST",
+                &format!(
+                    "/api/v1/challenges/{}/submissions",
+                    fixture.challenge.id.as_uuid()
+                ),
+                Some(&fixture.team_token),
+                json!({ "block_program": valid_program() }),
+            )
+            .expect("request should build"),
+        )
         .await
-        .expect("judge should run")
-        .expect("submission should be judged");
-    assert_eq!(duplicate.id, second_submission.id);
-    assert_eq!(duplicate.status, SubmissionStatus::Completed);
-    assert_eq!(duplicate.passed, Some(true));
-    assert_eq!(duplicate.awarded_points, Some(0));
+        .expect("request should complete");
+    assert_eq!(second_response.status(), StatusCode::CREATED);
+    let second_body = response_json(second_response).await;
+    assert_eq!(second_body["submission"]["status"], "completed");
 
     let team = fixture
         .state
@@ -157,9 +130,8 @@ async fn judge_completion_awards_points_once_and_leaderboard_reflects_score() {
         .get_team(fixture.team.id)
         .expect("store should read")
         .expect("team should exist");
-    assert_eq!(team.total_score, fixture.challenge.points);
+    assert_eq!(team.total_score, 0);
 
-    let app = router(fixture.state.clone());
     let leaderboard_response = app
         .clone()
         .oneshot(get_request("/api/v1/leaderboard", None).expect("request should build"))
@@ -172,19 +144,19 @@ async fn judge_completion_awards_points_once_and_leaderboard_reflects_score() {
         leaderboard_body["teams"][0]["team_id"],
         fixture.team.id.as_uuid().to_string()
     );
+    assert_eq!(leaderboard_body["teams"][0]["total_score"], 0);
+    assert_eq!(leaderboard_body["teams"][0]["solved_count"], 0);
     assert_eq!(
-        leaderboard_body["teams"][0]["total_score"],
-        fixture.challenge.points
+        leaderboard_body["teams"][0]["last_score_event_at"],
+        Value::Null
     );
-    assert_eq!(leaderboard_body["teams"][0]["solved_count"], 1);
-    assert!(leaderboard_body["teams"][0]["last_score_event_at"].is_string());
 
     let asset_response = app
         .oneshot(
             get_request(
                 &format!(
                     "/api/v1/assets/results/{}.png",
-                    first_submission.id.as_uuid()
+                    first_body["submission"]["id"].as_str().expect("id")
                 ),
                 None,
             )
@@ -215,7 +187,6 @@ async fn submit_rejects_challenges_outside_active_set() {
             target_image_path: None,
             target_image_url: None,
             points: 50,
-            pass_threshold: 1.0,
             enabled: true,
             order: 1,
             canvas: CanvasConfig::default(),
@@ -239,7 +210,6 @@ async fn submit_rejects_challenges_outside_active_set() {
             target_image_path: None,
             target_image_url: None,
             points: 50,
-            pass_threshold: 1.0,
             enabled: true,
             order: 1,
             canvas: CanvasConfig::default(),
@@ -398,19 +368,9 @@ async fn admin_bulk_score_adjustment_uses_spec_contract_and_validates_payloads()
 }
 
 #[tokio::test]
-async fn admin_can_cancel_queued_and_prioritize_queue_order() {
+async fn admin_judge_queue_routes_are_removed() {
     let fixture = Fixture::new();
     let first = fixture
-        .state
-        .repository
-        .create_submission(fixture.team.id, fixture.challenge.id, valid_program(), None)
-        .expect("submission should create");
-    let second = fixture
-        .state
-        .repository
-        .create_submission(fixture.team.id, fixture.challenge.id, valid_program(), None)
-        .expect("submission should create");
-    let third = fixture
         .state
         .repository
         .create_submission(fixture.team.id, fixture.challenge.id, valid_program(), None)
@@ -424,7 +384,7 @@ async fn admin_can_cancel_queued_and_prioritize_queue_order() {
                 "POST",
                 &format!(
                     "/api/v1/admin/judge-queue/{}/prioritize",
-                    third.id.as_uuid()
+                    first.id.as_uuid()
                 ),
                 Some(&fixture.admin_token),
                 json!({ "position": 1 }),
@@ -433,14 +393,14 @@ async fn admin_can_cancel_queued_and_prioritize_queue_order() {
         )
         .await
         .expect("request should complete");
-    assert_eq!(prioritize_response.status(), StatusCode::OK);
+    assert_eq!(prioritize_response.status(), StatusCode::NOT_FOUND);
 
     let cancel_response = app
         .clone()
         .oneshot(
             json_request(
                 "POST",
-                &format!("/api/v1/admin/submissions/{}/cancel", second.id.as_uuid()),
+                &format!("/api/v1/admin/submissions/{}/cancel", first.id.as_uuid()),
                 Some(&fixture.admin_token),
                 json!({}),
             )
@@ -448,9 +408,7 @@ async fn admin_can_cancel_queued_and_prioritize_queue_order() {
         )
         .await
         .expect("request should complete");
-    assert_eq!(cancel_response.status(), StatusCode::OK);
-    let cancel_body = response_json(cancel_response).await;
-    assert_eq!(cancel_body["status"], "cancelled");
+    assert_eq!(cancel_response.status(), StatusCode::NOT_FOUND);
 
     let queue_response = app
         .oneshot(
@@ -459,17 +417,7 @@ async fn admin_can_cancel_queued_and_prioritize_queue_order() {
         )
         .await
         .expect("request should complete");
-    assert_eq!(queue_response.status(), StatusCode::OK);
-    let queue_body = response_json(queue_response).await;
-    assert_eq!(queue_body["queue_length"], 2);
-    assert_eq!(
-        queue_body["submissions"][0]["id"],
-        third.id.as_uuid().to_string()
-    );
-    assert_eq!(
-        queue_body["submissions"][1]["id"],
-        first.id.as_uuid().to_string()
-    );
+    assert_eq!(queue_response.status(), StatusCode::NOT_FOUND);
 }
 
 struct Fixture {
@@ -502,7 +450,6 @@ impl Fixture {
                 target_image_path: None,
                 target_image_url: None,
                 points: 50,
-                pass_threshold: 1.0,
                 enabled: true,
                 order: 1,
                 canvas: CanvasConfig::default(),

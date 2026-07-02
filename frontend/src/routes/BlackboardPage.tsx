@@ -1,35 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { ClockIcon } from "lucide-react"
 
 import { TurtlePreviewPanel } from "@/components/turtle"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { adminApi, errorMessage } from "@/lib/admin/api"
-import type { BlackboardEvent, LeaderboardResponse, Submission, TraceStep } from "@/lib/admin/types"
-import { cn } from "@/lib/utils"
-
-type LivePlayback = {
-  submissionId: string
-  teamId: string
-  challengeId: string
-  canvasWidth: number
-  canvasHeight: number
-  stepCount: number | null
-  currentStep: number | null
-  steps: TraceStep[]
-  completed: boolean
-}
+import type { BlackboardState, GameStateResponse, GameSubmission } from "@/lib/game/types"
 
 export default function BlackboardPage() {
   const queryClient = useQueryClient()
-  const [playback, setPlayback] = useState<LivePlayback | null>(null)
-  const [leaderboard, setLeaderboard] = useState<LeaderboardResponse | null>(null)
-  const previousLeaderboard = useRef<LeaderboardResponse | null>(null)
-  const changedLeaderboardTeams = useRef<Set<string>>(new Set())
-  const [leaderboardAnimationTick, setLeaderboardAnimationTick] = useState(0)
   const blackboard = useQuery({
     queryKey: ["public", "blackboard"],
     queryFn: adminApi.blackboard,
@@ -38,362 +19,252 @@ export default function BlackboardPage() {
 
   useEffect(() => {
     const events = new EventSource("/api/v1/blackboard/events")
-
-    function invalidateBlackboard() {
+    events.addEventListener("message", () => {
       void queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] })
-    }
-
-    events.addEventListener("message", (message) => {
-      const event = parseBlackboardEvent(message)
-      if (!event) return
-
-      switch (event.type) {
-        case "judging_started":
-          setPlayback({
-            submissionId: event.submission_id,
-            teamId: event.team_id,
-            challengeId: event.challenge_id,
-            canvasWidth: event.canvas_width,
-            canvasHeight: event.canvas_height,
-            stepCount: event.step_count,
-            currentStep: null,
-            steps: [],
-            completed: false,
-          })
-          invalidateBlackboard()
-          break
-        case "judging_step":
-          setPlayback((current) => {
-            const base =
-              current?.submissionId === event.submission_id
-                ? current
-                : {
-                    submissionId: event.submission_id,
-                    teamId: event.team_id,
-                    challengeId: event.challenge_id,
-                    canvasWidth: event.canvas_width,
-                    canvasHeight: event.canvas_height,
-                    stepCount: null,
-                    currentStep: null,
-                    steps: [],
-                    completed: false,
-                  }
-
-            return {
-              ...base,
-              canvasWidth: event.canvas_width,
-              canvasHeight: event.canvas_height,
-              currentStep: event.step.step_index,
-              steps: [...base.steps, { ...event.step, duration_ms: event.playback_ms }],
-            }
-          })
-          break
-        case "judging_completed":
-          setPlayback((current) =>
-            current?.submissionId === event.submission_id ? { ...current, completed: true } : current,
-          )
-          invalidateBlackboard()
-          break
-        case "submission_updated":
-        case "score_recorded":
-          invalidateBlackboard()
-          break
-      }
     })
-
     return () => events.close()
   }, [queryClient])
 
-  useEffect(() => {
-    const events = new EventSource("/api/v1/leaderboard/events")
-    let clearAnimation: number | undefined
+  if (blackboard.isLoading) {
+    return (
+      <main className="min-h-svh bg-background p-4 lg:p-8">
+        <div className="mx-auto grid max-w-[1800px] gap-4">
+          <Skeleton className="h-40" />
+          <Skeleton className="h-[680px]" />
+        </div>
+      </main>
+    )
+  }
 
-    events.addEventListener("message", (message) => {
-      const event = parseLeaderboardEvent(message)
-      if (!event) return
-
-      const changedTeams = changedTeamsForLeaderboard(previousLeaderboard.current, event)
-      previousLeaderboard.current = event
-      changedLeaderboardTeams.current = changedTeams
-      setLeaderboard(event)
-      setLeaderboardAnimationTick((value) => value + 1)
-
-      if (clearAnimation !== undefined) window.clearTimeout(clearAnimation)
-      clearAnimation = window.setTimeout(() => {
-        changedLeaderboardTeams.current = new Set()
-        setLeaderboardAnimationTick((value) => value + 1)
-      }, 1_400)
-    })
-
-    return () => {
-      if (clearAnimation !== undefined) window.clearTimeout(clearAnimation)
-      events.close()
-    }
-  }, [])
-
-  const currentSubmission = useMemo(() => {
-    if (!blackboard.data) return null
-    if (playback) {
-      return blackboard.data.running.find((submission) => submission.id === playback.submissionId) ?? null
-    }
-    return blackboard.data.running[0] ?? null
-  }, [blackboard.data, playback])
-  const leaderboardTeams = leaderboard?.teams ?? blackboard.data?.leaderboard ?? []
+  if (blackboard.isError || !blackboard.data) {
+    return (
+      <main className="flex min-h-svh items-center justify-center bg-background p-4">
+        <Card className="w-full max-w-2xl">
+          <CardContent className="pt-6">
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>無法載入黑板</EmptyTitle>
+                <EmptyDescription>{blackboard.isError ? errorMessage(blackboard.error) : "目前沒有黑板資料。"}</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          </CardContent>
+        </Card>
+      </main>
+    )
+  }
 
   return (
-    <main className="h-svh overflow-hidden bg-muted/30 p-5 lg:p-8">
-      <div className="mx-auto flex h-full max-w-[1920px] flex-col gap-5">
-        <Card className="shrink-0">
-          <CardHeader className="flex-row items-center justify-between gap-6">
-            <div>
-              <CardDescription className="text-lg uppercase tracking-[0.28em]">Turtle Game</CardDescription>
-              <CardTitle className="font-heading text-5xl lg:text-7xl">即時戰況黑板</CardTitle>
-            </div>
-            <CardAction className="flex items-center gap-3">
-              <Badge variant={blackboard.data?.paused ? "destructive" : "secondary"} className="px-4 py-2 text-lg">
-                {blackboard.data?.status ?? "loading"}
-              </Badge>
-              <Badge variant="outline" className="px-4 py-2 text-lg">
-                佇列 {blackboard.data?.queue_length ?? 0}
-              </Badge>
-            </CardAction>
-          </CardHeader>
-        </Card>
-
-        {blackboard.isLoading ? (
-          <div className="grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
-            <Skeleton className="h-full rounded-xl" />
-            <Skeleton className="h-full rounded-xl" />
-          </div>
-        ) : blackboard.isError ? (
-          <Card className="flex min-h-0 flex-1 items-center justify-center">
-            <CardContent>
-              <Empty>
-                <EmptyHeader>
-                  <EmptyTitle>無法載入戰況黑板</EmptyTitle>
-                  <EmptyDescription>{errorMessage(blackboard.error)}</EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            </CardContent>
-          </Card>
-        ) : !blackboard.data ? (
-          <Card className="flex min-h-0 flex-1 items-center justify-center">
-            <CardContent>
-              <Empty>
-                <EmptyHeader>
-                  <EmptyTitle>目前沒有戰況資料</EmptyTitle>
-                  <EmptyDescription>正在等待戰況黑板資料。</EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
-            <Card className="min-h-0 overflow-hidden">
-              <CardHeader className="flex-row items-start justify-between gap-4">
-                <div>
-                  <CardDescription className="text-lg uppercase tracking-[0.24em]">即時預覽</CardDescription>
-                  <CardTitle className="font-heading text-4xl lg:text-5xl">
-                    {currentSubmission || playback ? "正在繪圖" : "等待提交"}
-                  </CardTitle>
-                </div>
-                <CardAction>
-                  <Badge variant="outline" className="px-4 py-2 text-lg">
-                    執行中 {blackboard.data.running.length}
-                  </Badge>
-                </CardAction>
-              </CardHeader>
-              <CardContent className="min-h-0 flex-1">
-                <LiveSubmissionPreview
-                  submission={currentSubmission}
-                  playback={
-                    playback && (!currentSubmission || playback.submissionId === currentSubmission.id) ? playback : null
-                  }
-                />
-              </CardContent>
-            </Card>
-
-            <Card className="min-h-0 overflow-hidden">
-              <CardHeader className="flex-row items-start justify-between gap-4">
-                <div>
-                  <CardDescription className="text-lg uppercase tracking-[0.24em]">排行榜</CardDescription>
-                  <CardTitle className="font-heading text-4xl lg:text-5xl">領先隊伍</CardTitle>
-                </div>
-                <CardAction>
-                  <Badge variant="outline" className="px-4 py-2 text-lg">
-                    {leaderboardTeams.length} 隊
-                  </Badge>
-                </CardAction>
-              </CardHeader>
-              <CardContent className="min-h-0 flex-1 overflow-hidden">
-                {leaderboardTeams.length === 0 ? (
-                  <Empty className="h-full">
-                    <EmptyHeader>
-                      <EmptyTitle>尚無分數</EmptyTitle>
-                      <EmptyDescription>隊伍得分後會顯示在這裡。</EmptyDescription>
-                    </EmptyHeader>
-                  </Empty>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="text-xl">名次</TableHead>
-                        <TableHead className="text-xl">隊伍</TableHead>
-                        <TableHead className="text-right text-xl">分數</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {leaderboardTeams.slice(0, 8).map((team) => (
-                        <TableRow
-                          key={`${team.team_id}-${leaderboardAnimationTick}`}
-                          className={cn(
-                            "blackboard-leaderboard-row",
-                            team.rank <= 3 && "bg-muted/60",
-                            changedLeaderboardTeams.current.has(team.team_id) && "blackboard-leaderboard-row-updated",
-                          )}
-                        >
-                          <TableCell className="font-heading text-4xl font-semibold tabular-nums">
-                            #{team.rank}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex min-w-0 flex-col gap-1">
-                              <span className="truncate text-2xl font-semibold lg:text-3xl">{team.team_name}</span>
-                              <span className="text-lg text-muted-foreground">解出 {team.solved_count} 題</span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right font-heading text-4xl font-semibold tabular-nums lg:text-5xl">
-                            {team.total_score}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        )}
+    <main className="min-h-svh bg-background p-4 lg:p-8">
+      <div className="mx-auto grid max-w-[1800px] gap-4">
+        <BlackboardHeader data={blackboard.data} />
+        <PhaseView data={blackboard.data} />
       </div>
     </main>
   )
 }
 
-function LiveSubmissionPreview({
-  submission,
-  playback,
-}: {
-  submission: Submission | null
-  playback: LivePlayback | null
-}) {
-  if (playback) {
-    return (
-      <TurtlePreviewPanel
-        trace={liveTraceFromPlayback(playback)}
-        title="即時繪圖"
-        sourceLabel={playback.completed ? "即將完成" : stepLabel(playback)}
-        footerStart={stepLabel(playback)}
-        footerEnd={`${visibleStrokeCount(playback.steps)} 筆畫`}
-        animated={!playback.completed && playback.currentStep !== null}
-        animationKey={`${playback.submissionId}:${playback.currentStep ?? "starting"}`}
-        currentStepIndex={playback.currentStep ?? undefined}
-        className="h-full w-full rounded-xl text-lg"
-        viewportClassName="h-[calc(100%-5.5rem)]"
-        canvasClassName="drop-shadow-2xl"
-        showTarget={false}
-        showTurtle
-      />
-    )
-  }
-
-  if (submission) {
-    return (
-      <TurtlePreviewPanel
-        trace={submission.trace}
-        program={submission.block_program}
-        resultImageUrl={submission.result_image_url}
-        title="目前提交"
-        sourceLabel={submission.status}
-        footerStart={submission.id.slice(0, 8)}
-        footerEnd={submission.passed === null ? "評測中" : submission.passed ? "通過" : "未通過"}
-        className="h-full w-full rounded-xl text-lg"
-        viewportClassName="h-[calc(100%-5.5rem)]"
-        canvasClassName="drop-shadow-2xl"
-        showTarget={false}
-        showTurtle={false}
-      />
-    )
-  }
-
+function BlackboardHeader({ data }: { data: BlackboardState }) {
   return (
-    <Empty className="h-full rounded-xl border">
-      <EmptyHeader>
-        <EmptyTitle className="font-heading text-5xl">評測目前閒置</EmptyTitle>
-        <EmptyDescription className="text-2xl">下一張繪圖會顯示在這裡。</EmptyDescription>
-      </EmptyHeader>
-    </Empty>
+    <Card>
+      <CardContent className="p-6 lg:p-8">
+        <TimerBlock snapshot={data.game} />
+      </CardContent>
+    </Card>
   )
 }
 
-function stepLabel(playback: LivePlayback) {
-  if (playback.currentStep === null) return playback.stepCount === null ? "準備開始" : `0 / ${playback.stepCount} 步`
-  if (playback.stepCount === null) return `第 ${playback.currentStep + 1} 步`
-  return `${Math.min(playback.currentStep + 1, playback.stepCount)} / ${playback.stepCount} 步`
+function PhaseView({ data }: { data: BlackboardState }) {
+  if (data.game.state.phase === "submission_open") return <SubmissionOpenView data={data} />
+  if (data.game.state.phase === "team_selection") return <TeamSelectionCountdown snapshot={data.game} />
+  if (data.game.state.phase === "public_voting") return <PublicVotingView data={data} />
+  if (data.game.state.phase === "round_complete" || data.game.state.phase === "scoring") return <RoundCompleteView data={data} />
+  return <IdleView />
 }
 
-function liveTraceFromPlayback(playback: LivePlayback) {
-  return {
-    canvas_width: playback.canvasWidth,
-    canvas_height: playback.canvasHeight,
-    final_state: playback.steps.at(-1)?.after,
-    steps: playback.steps,
-  }
+function SubmissionOpenView({ data }: { data: BlackboardState }) {
+  const counts = countSubmissionsByTeam(data.game.round_submissions)
+  const teams = data.teams.filter((team) => team.enabled)
+
+  return (
+    <Card>
+      <CardHeader className="border-b">
+        <CardTitle className="text-3xl lg:text-5xl">各隊已送出作畫數</CardTitle>
+        <CardDescription className="text-xl">Submission Open</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4 pt-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+        {teams.map((team) => (
+          <div key={team.id} className="rounded-md border bg-muted/30 p-5">
+            <div className="truncate text-2xl font-semibold">{team.name}</div>
+            <div className="mt-6 font-mono text-7xl font-semibold tabular-nums">{counts.get(team.id) ?? 0}</div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  )
 }
 
-function visibleStrokeCount(steps: TraceStep[]) {
-  let count = 0
-  for (const step of steps) {
-    if (step.block_type === "clear") {
-      count = 0
-      continue
-    }
-    if (step.draw_line) count += 1
-  }
-  return count
+function TeamSelectionCountdown({ snapshot }: { snapshot: GameStateResponse }) {
+  const seconds = useRemainingSeconds(snapshot)
+
+  return (
+    <Card>
+      <CardContent className="flex min-h-[58svh] flex-col items-center justify-center gap-6 text-center">
+        <div className="flex items-center gap-3 text-2xl text-muted-foreground">
+          <ClockIcon className="size-8" />
+          Team Selection
+        </div>
+        <div className="font-mono text-8xl font-semibold tabular-nums lg:text-9xl">{formatTimer(seconds)}</div>
+      </CardContent>
+    </Card>
+  )
 }
 
-function parseBlackboardEvent(message: MessageEvent) {
-  try {
-    return JSON.parse(message.data) as BlackboardEvent
-  } catch {
-    return null
-  }
+function PublicVotingView({ data }: { data: BlackboardState }) {
+  const submissionsById = useMemo(
+    () => new Map(data.game.round_submissions.map((submission) => [submission.id, submission])),
+    [data.game.round_submissions],
+  )
+  const teamsById = useMemo(() => new Map(data.teams.map((team) => [team.id, team])), [data.teams])
+  const nominations = data.game.nominations
+    .map((nomination) => ({
+      nomination,
+      submission: submissionsById.get(nomination.submission_id) ?? null,
+      team: teamsById.get(nomination.team_id) ?? null,
+      votes: data.game.public_vote_counts.find((count) => count.target_submission_id === nomination.submission_id)?.vote_count ?? 0,
+    }))
+    .sort((left, right) => right.votes - left.votes || (left.team?.name ?? "").localeCompare(right.team?.name ?? ""))
+
+  return (
+    <Card>
+      <CardHeader className="border-b">
+        <CardTitle className="text-3xl lg:text-5xl">公開投票即時票數</CardTitle>
+        <CardDescription className="text-xl">Public Voting</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4 pt-4 md:grid-cols-2 xl:grid-cols-3">
+        {nominations.length === 0 ? (
+          <div className="md:col-span-2 xl:col-span-3">
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>尚無代表作品</EmptyTitle>
+                <EmptyDescription>等待小隊選出代表作品。</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          </div>
+        ) : (
+          nominations.map(({ nomination, submission, team, votes }) => (
+            <div key={nomination.team_id} className="grid gap-3 rounded-md border p-4">
+              <div className="flex items-center justify-between gap-4">
+                <div className="truncate text-2xl font-semibold">{team?.name ?? nomination.team_id.slice(0, 8)}</div>
+                <div className="font-mono text-5xl font-semibold tabular-nums">{votes}</div>
+              </div>
+              <SubmissionPreview submission={submission} />
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
+  )
 }
 
-function parseLeaderboardEvent(message: MessageEvent) {
-  try {
-    return JSON.parse(message.data) as LeaderboardResponse
-  } catch {
-    return null
-  }
+function RoundCompleteView({ data }: { data: BlackboardState }) {
+  return (
+    <Card>
+      <CardHeader className="border-b">
+        <CardTitle className="text-3xl lg:text-5xl">各小隊分數排行榜</CardTitle>
+        <CardDescription className="text-xl">Round Complete</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3 pt-4">
+        {data.leaderboard.length === 0 ? (
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>尚無分數</EmptyTitle>
+              <EmptyDescription>回合結算後會顯示排行榜。</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          data.leaderboard.slice(0, 12).map((team) => (
+            <div key={team.team_id} className="grid grid-cols-[5rem_minmax(0,1fr)_10rem] items-center gap-4 rounded-md border bg-muted/30 p-4">
+              <div className="font-mono text-4xl font-semibold tabular-nums">#{team.rank}</div>
+              <div className="truncate text-3xl font-semibold">{team.team_name}</div>
+              <div className="text-right font-mono text-5xl font-semibold tabular-nums">{team.total_score}</div>
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
+  )
 }
 
-function changedTeamsForLeaderboard(
-  previous: LeaderboardResponse | null,
-  next: LeaderboardResponse,
-) {
-  if (!previous) return new Set<string>()
+function IdleView() {
+  return (
+    <Card>
+      <CardContent className="flex min-h-[58svh] items-center justify-center">
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle className="text-4xl">等待回合開始</EmptyTitle>
+            <EmptyDescription className="text-xl">主持人開始後黑板會自動更新。</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      </CardContent>
+    </Card>
+  )
+}
 
-  const previousTeams = new Map(previous.teams.map((team) => [team.team_id, team]))
-  const changedTeams = new Set<string>()
-  for (const team of next.teams) {
-    const previousTeam = previousTeams.get(team.team_id)
-    if (!previousTeam) {
-      changedTeams.add(team.team_id)
-      continue
-    }
-    if (previousTeam.rank !== team.rank || previousTeam.total_score !== team.total_score) {
-      changedTeams.add(team.team_id)
-    }
+function SubmissionPreview({ submission }: { submission: GameSubmission | null }) {
+  if (!submission) {
+    return <div className="rounded-md border border-dashed p-6 text-center text-xl text-muted-foreground">作品尚未載入</div>
   }
-  return changedTeams
+
+  return (
+    <TurtlePreviewPanel
+      program={submission.block_program}
+      trace={submission.trace}
+      resultImageUrl={submission.result_image_url}
+      title="作品"
+      sourceLabel={`#${submission.id.slice(0, 8)}`}
+      className="h-[42svh] min-h-80 text-lg"
+      viewportClassName="h-[calc(100%-5rem)]"
+      showTarget={false}
+      showTurtle={false}
+    />
+  )
+}
+
+function TimerBlock({ snapshot }: { snapshot: GameStateResponse }) {
+  const seconds = useRemainingSeconds(snapshot)
+
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 text-center">
+      <div className="flex items-center gap-2 text-xl text-muted-foreground lg:text-2xl">
+        <ClockIcon className="size-6 lg:size-7" />
+        Timer
+      </div>
+      <div className="font-mono text-7xl font-semibold tabular-nums lg:text-8xl">{formatTimer(seconds)}</div>
+    </div>
+  )
+}
+
+function useRemainingSeconds(snapshot: GameStateResponse) {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  if (!snapshot.state.phase_ends_at) return null
+  return Math.max(0, Math.ceil((Date.parse(snapshot.state.phase_ends_at) - now) / 1_000))
+}
+
+function countSubmissionsByTeam(submissions: GameSubmission[]) {
+  const counts = new Map<string, number>()
+  for (const submission of submissions) counts.set(submission.team_id, (counts.get(submission.team_id) ?? 0) + 1)
+  return counts
+}
+
+function formatTimer(seconds: number | null) {
+  if (seconds === null) return "--:--"
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`
 }

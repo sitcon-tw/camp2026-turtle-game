@@ -42,9 +42,9 @@ pub struct ImportChallenge {
     pub slug: String,
     pub title: String,
     pub description: String,
-    pub target_image_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_image_path: Option<String>,
     pub points: i32,
-    pub pass_threshold: f64,
     pub enabled: bool,
     pub order: i32,
     pub canvas: CanvasConfig,
@@ -57,12 +57,7 @@ impl<'de> Deserialize<'de> for ImportChallenge {
         D: serde::Deserializer<'de>,
     {
         let raw = RawImportChallenge::deserialize(deserializer)?;
-        let target_image_path = match (raw.target_image_path, raw.image_path) {
-            (Some(path), _) | (None, Some(path)) => path,
-            (None, None) => {
-                return Err(serde::de::Error::missing_field("target_image_path"));
-            }
-        };
+        let target_image_path = raw.target_image_path.or(raw.image_path);
 
         Ok(Self {
             slug: raw.slug,
@@ -70,7 +65,6 @@ impl<'de> Deserialize<'de> for ImportChallenge {
             description: raw.description,
             target_image_path,
             points: raw.points,
-            pass_threshold: raw.pass_threshold,
             enabled: raw.enabled,
             order: raw.order,
             canvas: raw.canvas,
@@ -90,7 +84,6 @@ struct RawImportChallenge {
     #[serde(default)]
     image_path: Option<String>,
     points: i32,
-    pass_threshold: f64,
     #[serde(default = "default_enabled")]
     enabled: bool,
     #[serde(default)]
@@ -235,25 +228,24 @@ fn validate_manifest(
 
     let mut slugs = HashSet::new();
     for challenge in &manifest.challenges {
-        if challenge.slug.trim().is_empty()
-            || challenge.title.trim().is_empty()
-            || !challenge.pass_threshold.is_finite()
-        {
+        if challenge.slug.trim().is_empty() || challenge.title.trim().is_empty() {
             return Err(ChallengeSetZipError::InvalidManifest);
         }
         if !slugs.insert(challenge.slug.clone()) {
             return Err(ChallengeSetZipError::DuplicateSlug(challenge.slug.clone()));
         }
-        validate_zip_path(&challenge.target_image_path)?;
-        if !challenge.target_image_path.starts_with(IMAGE_PREFIX) {
-            return Err(ChallengeSetZipError::ImageOutsideDirectory(
-                challenge.target_image_path.clone(),
-            ));
-        }
-        if !images.contains_key(&challenge.target_image_path) {
-            return Err(ChallengeSetZipError::MissingImage(
-                challenge.target_image_path.clone(),
-            ));
+        if let Some(target_image_path) = &challenge.target_image_path {
+            validate_zip_path(target_image_path)?;
+            if !target_image_path.starts_with(IMAGE_PREFIX) {
+                return Err(ChallengeSetZipError::ImageOutsideDirectory(
+                    target_image_path.clone(),
+                ));
+            }
+            if !images.contains_key(target_image_path) {
+                return Err(ChallengeSetZipError::MissingImage(
+                    target_image_path.clone(),
+                ));
+            }
         }
     }
 
@@ -331,12 +323,8 @@ impl ExportManifest {
                     slug: challenge.slug.clone(),
                     title: challenge.title.clone(),
                     description: challenge.description.clone(),
-                    target_image_path: challenge
-                        .target_image_path
-                        .clone()
-                        .unwrap_or_else(|| fallback_image_path(challenge)),
+                    target_image_path: challenge.target_image_path.clone(),
                     points: challenge.points,
-                    pass_threshold: challenge.pass_threshold,
                     enabled: challenge.enabled,
                     order: challenge.order,
                     canvas: challenge.canvas.clone(),
@@ -345,16 +333,6 @@ impl ExportManifest {
                 .collect(),
         }
     }
-}
-
-fn fallback_image_path(challenge: &Challenge) -> String {
-    let extension = challenge
-        .target_image_asset_id
-        .as_deref()
-        .and_then(|asset_id| asset_id.rsplit('.').next())
-        .filter(|extension| matches!(*extension, "png" | "jpg" | "jpeg"))
-        .unwrap_or("png");
-    format!("images/{}.{extension}", challenge.slug)
 }
 
 pub fn imported_asset_id() -> String {

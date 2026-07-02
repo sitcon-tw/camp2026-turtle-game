@@ -41,7 +41,7 @@ export default function AdminLoginPage() {
   }
 
   return (
-    <main className="min-h-svh bg-[radial-gradient(circle_at_top_left,var(--muted),transparent_34rem),linear-gradient(135deg,var(--background),var(--muted))] px-4 py-8">
+    <main className="min-h-svh bg-background px-4 py-8">
       <div className="mx-auto flex min-h-[calc(100svh-4rem)] w-full max-w-md flex-col justify-center">
         <Card className="shadow-xl shadow-foreground/5">
           <CardHeader className="text-center">
@@ -49,7 +49,7 @@ export default function AdminLoginPage() {
               <TurtleIcon className="size-6" />
             </div>
             <CardTitle className="text-2xl">Admin sign in</CardTitle>
-            <CardDescription>Use the admin password to manage teams, challenges, judging, and scores.</CardDescription>
+            <CardDescription>Use the admin password to open the command center.</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit}>
@@ -73,7 +73,7 @@ export default function AdminLoginPage() {
                   {submitting ? <Loader2Icon className="animate-spin" /> : <LockKeyholeIcon />}
                   Sign in
                 </Button>
-                <Button type="button" variant="ghost" render={<Link to="/" />}>
+                <Button type="button" variant="ghost" nativeButton={false} render={<Link to="/" />}>
                   <ArrowLeftIcon /> Back to game
                 </Button>
               </FieldGroup>
