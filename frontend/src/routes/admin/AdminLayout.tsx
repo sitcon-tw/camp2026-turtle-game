@@ -1,14 +1,10 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom"
 import {
-  ActivityIcon,
   ArrowLeftIcon,
-  GaugeIcon,
+  Gamepad2Icon,
   ListChecksIcon,
   LogOutIcon,
-  MedalIcon,
-  ShieldIcon,
-  SplineIcon,
   TurtleIcon,
   UsersIcon,
 } from "lucide-react"
@@ -37,13 +33,9 @@ import { clearAdminToken, getAdminToken } from "@/lib/admin/session"
 import type { AdminMeResponse } from "@/lib/admin/types"
 
 const navItems = [
-  { href: "/admin", label: "Overview", icon: GaugeIcon },
+  { href: "/admin", label: "Command Center", icon: Gamepad2Icon },
+  { href: "/admin/challenges", label: "Challenges", icon: ListChecksIcon },
   { href: "/admin/teams", label: "Teams", icon: UsersIcon },
-  { href: "/admin/challenge-sets", label: "Challenge sets", icon: ListChecksIcon },
-  { href: "/admin/challenges", label: "Challenges", icon: SplineIcon },
-  { href: "/admin/submissions", label: "Submissions", icon: ActivityIcon },
-  { href: "/admin/judge-queue", label: "Judge queue", icon: ShieldIcon },
-  { href: "/admin/scores", label: "Scores", icon: MedalIcon },
 ]
 
 function isActivePath(pathname: string, href: string) {
@@ -176,7 +168,7 @@ export default function AdminLayout() {
             </div>
           </div>
           <AdminHealthPill ok={healthOk} />
-          <Button variant="outline" size="sm" render={<Link to="/" />}>
+          <Button variant="outline" size="sm" nativeButton={false} render={<Link to="/" />}>
             <ArrowLeftIcon /> Home
           </Button>
         </header>

@@ -8,20 +8,14 @@ import { getAdminToken } from "@/lib/admin/session"
 import HomePage from "@/routes/HomePage"
 import AdminLoginPage from "@/routes/admin/AdminLoginPage"
 import AdminLayout from "@/routes/admin/AdminLayout"
-import AdminOverviewPage from "@/routes/admin/AdminOverviewPage"
-import AdminTeamsPage from "@/routes/admin/AdminTeamsPage"
-import AdminChallengeSetsPage from "@/routes/admin/AdminChallengeSetsPage"
+import AdminCommandCenterPage from "@/routes/admin/AdminCommandCenterPage"
 import AdminChallengesPage from "@/routes/admin/AdminChallengesPage"
-import AdminSubmissionsPage from "@/routes/admin/AdminSubmissionsPage"
-import AdminJudgeQueuePage from "@/routes/admin/AdminJudgeQueuePage"
-import AdminScoresPage from "@/routes/admin/AdminScoresPage"
-import AdminSystemPage from "@/routes/admin/AdminSystemPage"
+import AdminTeamsPage from "@/routes/admin/AdminTeamsPage"
 import BlackboardPage from "@/routes/BlackboardPage"
 import { studentApi } from "@/lib/student/api"
 import { getTeamToken } from "@/lib/student/session"
 import StudentLayout from "@/routes/student/StudentLayout"
-import ChallengeListPage from "@/routes/student/ChallengeListPage"
-import ChallengePlayPage from "@/routes/student/ChallengePlayPage"
+import TeamStationPage from "@/routes/student/TeamStationPage"
 import "./App.css"
 
 const queryClient = new QueryClient({
@@ -75,21 +69,15 @@ function App() {
               <Route path="/blackboard" element={<BlackboardPage />} />
               <Route element={<RequireStudent />}>
                 <Route element={<StudentLayout />}>
-                  <Route path="/challenges" element={<ChallengeListPage />} />
-                  <Route path="/challenges/:challengeId" element={<ChallengePlayPage />} />
+                  <Route path="/play" element={<TeamStationPage />} />
                 </Route>
               </Route>
               <Route path="/admin/login" element={<AdminLoginPage />} />
               <Route element={<RequireAdmin />}>
                 <Route path="/admin" element={<AdminLayout />}>
-                  <Route index element={<AdminOverviewPage />} />
-                  <Route path="teams" element={<AdminTeamsPage />} />
-                  <Route path="challenge-sets" element={<AdminChallengeSetsPage />} />
+                  <Route index element={<AdminCommandCenterPage />} />
                   <Route path="challenges" element={<AdminChallengesPage />} />
-                  <Route path="submissions" element={<AdminSubmissionsPage />} />
-                  <Route path="judge-queue" element={<AdminJudgeQueuePage />} />
-                  <Route path="scores" element={<AdminScoresPage />} />
-                  <Route path="system" element={<AdminSystemPage />} />
+                  <Route path="teams" element={<AdminTeamsPage />} />
                 </Route>
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />

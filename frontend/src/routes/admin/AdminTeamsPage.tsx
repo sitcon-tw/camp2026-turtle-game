@@ -39,6 +39,7 @@ import { ConfirmAction } from "@/components/admin/AdminPrimitives"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { adminApi, errorMessage } from "@/lib/admin/api"
 import type { Team } from "@/lib/admin/types"
+import { normalizeLoginCodeInput } from "@/lib/login-code"
 
 type EnabledFilter = "all" | "enabled" | "disabled"
 
@@ -79,7 +80,7 @@ function parseBulkTeams(value: string) {
 
       return {
         name,
-        login_code: login_code || undefined,
+        login_code: login_code ? normalizeLoginCodeInput(login_code) : undefined,
         note: noteParts.join(", ") || undefined,
       }
     })
@@ -105,10 +106,6 @@ function TeamDialog({
 }) {
   const [form, setForm] = React.useState<TeamForm>(initialValue)
 
-  React.useEffect(() => {
-    if (open) setForm(initialValue)
-  }, [initialValue, open])
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
@@ -126,8 +123,9 @@ function TeamDialog({
         >
           <FieldGroup>
           <Field>
-            <FieldLabel>Team name</FieldLabel>
+            <FieldLabel htmlFor={`${mode}-team-name`}>Team name</FieldLabel>
             <Input
+              id={`${mode}-team-name`}
               required
               value={form.name}
               onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
@@ -135,16 +133,21 @@ function TeamDialog({
             />
           </Field>
           <Field>
-            <FieldLabel>Login code</FieldLabel>
+            <FieldLabel htmlFor={`${mode}-team-login-code`}>Login code</FieldLabel>
             <Input
+              id={`${mode}-team-login-code`}
               value={form.login_code}
-              onChange={(event) => setForm((current) => ({ ...current, login_code: event.target.value }))}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, login_code: normalizeLoginCodeInput(event.target.value) }))
+              }
               placeholder={mode === "create" ? "Leave blank to auto-generate" : "Current login code"}
+              autoCapitalize="characters"
             />
           </Field>
           <Field>
-            <FieldLabel>Note</FieldLabel>
+            <FieldLabel htmlFor={`${mode}-team-note`}>Note</FieldLabel>
             <Textarea
+              id={`${mode}-team-note`}
               value={form.note}
               onChange={(event) => setForm((current) => ({ ...current, note: event.target.value }))}
               placeholder="Internal admin note"
@@ -187,7 +190,7 @@ export default function AdminTeamsPage() {
     mutationFn: (form: TeamForm) =>
       adminApi.createTeam({
         name: form.name.trim(),
-        login_code: form.login_code.trim() || undefined,
+        login_code: normalizeLoginCodeInput(form.login_code).trim() || undefined,
         note: form.note.trim() || undefined,
       }),
     onSuccess: () => {
@@ -213,7 +216,7 @@ export default function AdminTeamsPage() {
     mutationFn: ({ id, form }: { id: string; form: TeamForm }) =>
       adminApi.updateTeam(id, {
         name: form.name.trim(),
-        login_code: form.login_code.trim(),
+        login_code: normalizeLoginCodeInput(form.login_code).trim(),
         note: form.note.trim() || null,
       }),
     onSuccess: () => {
@@ -381,41 +384,42 @@ export default function AdminTeamsPage() {
         </CardContent>
       </Card>
 
-      <TeamDialog
-        mode="create"
-        open={createOpen}
-        initialValue={emptyTeamForm}
-        isSaving={createTeam.isPending}
-        error={createTeam.isError ? errorMessage(createTeam.error) : null}
-        onOpenChange={(open) => {
-          setCreateOpen(open)
-          setActionError(null)
-        }}
-        onSubmit={(form) => createTeam.mutate(form)}
-      />
+      {createOpen ? (
+        <TeamDialog
+          mode="create"
+          open={createOpen}
+          initialValue={emptyTeamForm}
+          isSaving={createTeam.isPending}
+          error={createTeam.isError ? errorMessage(createTeam.error) : null}
+          onOpenChange={(open) => {
+            setCreateOpen(open)
+            setActionError(null)
+          }}
+          onSubmit={(form) => createTeam.mutate(form)}
+        />
+      ) : null}
 
-      <TeamDialog
-        mode="edit"
-        open={editingTeam !== null}
-        initialValue={
-          editingTeam
-            ? {
-                name: editingTeam.name,
-                login_code: editingTeam.login_code,
-                note: editingTeam.note ?? "",
-              }
-            : emptyTeamForm
-        }
-        isSaving={updateTeam.isPending}
-        error={updateTeam.isError ? errorMessage(updateTeam.error) : null}
-        onOpenChange={(open) => {
-          if (!open) setEditingTeam(null)
-          setActionError(null)
-        }}
-        onSubmit={(form) => {
-          if (editingTeam) updateTeam.mutate({ id: editingTeam.id, form })
-        }}
-      />
+      {editingTeam ? (
+        <TeamDialog
+          key={editingTeam.id}
+          mode="edit"
+          open={editingTeam !== null}
+          initialValue={{
+            name: editingTeam.name,
+            login_code: editingTeam.login_code,
+            note: editingTeam.note ?? "",
+          }}
+          isSaving={updateTeam.isPending}
+          error={updateTeam.isError ? errorMessage(updateTeam.error) : null}
+          onOpenChange={(open) => {
+            if (!open) setEditingTeam(null)
+            setActionError(null)
+          }}
+          onSubmit={(form) => {
+            updateTeam.mutate({ id: editingTeam.id, form })
+          }}
+        />
+      ) : null}
 
       <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
         <DialogContent className="sm:max-w-2xl">

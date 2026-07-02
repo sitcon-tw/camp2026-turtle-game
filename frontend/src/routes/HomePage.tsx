@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
+import { normalizeLoginCodeInput } from "@/lib/login-code"
 import { studentApi, studentErrorMessage } from "@/lib/student/api"
 import { setTeamToken } from "@/lib/student/session"
 
@@ -22,60 +23,67 @@ export default function HomePage() {
     onSuccess: (session) => {
       setTeamToken(session.access_token)
       queryClient.invalidateQueries({ queryKey: ["student"] })
-      navigate("/challenges")
+      navigate("/play")
     },
   })
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    login.mutate(teamCode.trim())
+    login.mutate(normalizeLoginCodeInput(teamCode).trim())
   }
 
   return (
-    <main className="min-h-svh bg-[radial-gradient(circle_at_20%_18%,hsl(var(--muted)),transparent_30rem),radial-gradient(circle_at_80%_75%,hsl(var(--secondary)),transparent_26rem),linear-gradient(160deg,hsl(var(--background)),hsl(var(--muted)))] p-6">
+    <main className="min-h-svh bg-background p-6">
       <div className="mx-auto flex min-h-[calc(100svh-3rem)] max-w-6xl items-center">
         <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
           <section className="space-y-6">
             <div className="inline-flex items-center gap-2 rounded-full border bg-background/70 px-3 py-1 text-sm text-muted-foreground backdrop-blur">
               <TurtleIcon className="size-4" />
-              Turtle 繪圖挑戰
+              Turtle Game
             </div>
             <div className="space-y-4">
-              <h1 className="max-w-3xl text-4xl font-semibold tracking-tight sm:text-6xl">查看挑戰狀態，追蹤隊伍評分進度。</h1>
-              <p className="max-w-2xl text-lg text-muted-foreground">輸入隊伍登入碼後，就可以查看目前開放的挑戰、送出紀錄與評分佇列。</p>
+              <h1 className="max-w-3xl text-4xl font-semibold tracking-tight sm:text-6xl">即時繪圖、投票與回合結果。</h1>
+              <p className="max-w-2xl text-lg text-muted-foreground">輸入隊伍登入碼後，直接進入本隊的 Team Station。</p>
             </div>
             <div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-              <div className="rounded-2xl border bg-background/60 p-4 backdrop-blur">
+              <div className="rounded-md border bg-card p-4">
                 <UsersIcon className="mb-3 size-5 text-foreground" />
                 以隊伍身分登入
               </div>
-              <div className="rounded-2xl border bg-background/60 p-4 backdrop-blur">
+              <div className="rounded-md border bg-card p-4">
                 <TurtleIcon className="mb-3 size-5 text-foreground" />
-                查看開放題目
+                完成本回合作品
               </div>
-              <div className="rounded-2xl border bg-background/60 p-4 backdrop-blur">
+              <div className="rounded-md border bg-card p-4">
                 <ArrowRightIcon className="mb-3 size-5 text-foreground" />
-                送出後等待評分
+                參與隊內與公開投票
               </div>
             </div>
           </section>
-          <Card className="bg-background/75 backdrop-blur">
+          <Card>
             <CardHeader>
               <div className="mb-2 flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground">
                 <LockKeyholeIcon className="size-5" />
               </div>
               <CardTitle>隊伍登入</CardTitle>
-              <CardDescription>請使用工作人員提供的隊伍登入碼進入挑戰頁面。</CardDescription>
+              <CardDescription>請使用工作人員提供的隊伍登入碼進入小隊工作站。</CardDescription>
             </CardHeader>
             <CardContent>
               <form className="grid gap-4" onSubmit={handleSubmit}>
                 <div className="grid gap-2">
                   <Label htmlFor="team-code">隊伍登入碼</Label>
-                  <Input id="team-code" value={teamCode} onChange={(event) => setTeamCode(event.target.value)} placeholder="輸入隊伍登入碼" autoComplete="username" />
+                  <Input
+                    id="team-code"
+                    value={teamCode}
+                    onChange={(event) => setTeamCode(normalizeLoginCodeInput(event.target.value))}
+                    placeholder="輸入隊伍登入碼"
+                    autoComplete="username"
+                    autoCapitalize="characters"
+                  />
                 </div>
                 {login.isError ? <p className="text-sm text-destructive">{studentErrorMessage(login.error)}</p> : null}
                 <Button type="submit" size="lg" disabled={!teamCode.trim() || login.isPending}>
-                  {login.isPending ? "登入中..." : "進入挑戰"} <ArrowRightIcon />
+                  {login.isPending ? "登入中..." : "進入工作站"} <ArrowRightIcon />
                 </Button>
               </form>
               <Separator className="my-5" />
@@ -84,7 +92,7 @@ export default function HomePage() {
                   <ShieldIcon className="size-4" />
                   管理者入口
                 </span>
-                <Button variant="outline" size="sm" render={<Link to="/admin/login" />}>
+                <Button variant="outline" size="sm" nativeButton={false} render={<Link to="/admin/login" />}>
                   Admin
                 </Button>
               </div>
