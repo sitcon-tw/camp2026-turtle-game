@@ -3,12 +3,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ClockIcon } from "lucide-react"
 
 import { TurtlePreviewPanel } from "@/components/turtle"
-import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import { adminApi, errorMessage } from "@/lib/admin/api"
-import type { BlackboardState, GamePhase, GameStateResponse, GameSubmission } from "@/lib/game/types"
+import type { BlackboardState, GameStateResponse, GameSubmission } from "@/lib/game/types"
 
 export default function BlackboardPage() {
   const queryClient = useQueryClient()
@@ -67,25 +66,8 @@ export default function BlackboardPage() {
 function BlackboardHeader({ data }: { data: BlackboardState }) {
   return (
     <Card>
-      <CardHeader className="border-b">
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
-          <div className="min-w-0">
-            <div className="mb-3 flex flex-wrap items-center gap-3">
-              <CardTitle className="text-4xl lg:text-6xl">Turtle Game</CardTitle>
-              <Badge variant="secondary" className="text-lg">{phaseLabel(data.game.state.phase)}</Badge>
-            </div>
-            <CardDescription className="truncate text-xl">
-              {data.game.challenge ? `${data.game.challenge.title} / ${data.game.challenge.description}` : "等待主持人開始回合"}
-            </CardDescription>
-          </div>
-          <TimerBlock snapshot={data.game} />
-        </div>
-      </CardHeader>
-      <CardContent className="grid gap-3 pt-4 sm:grid-cols-2 lg:grid-cols-4">
-        <LargeStat label="隊伍" value={data.teams.filter((team) => team.enabled).length} />
-        <LargeStat label="提交" value={data.game.round_submissions.length} />
-        <LargeStat label="代表作品" value={data.game.nominations.length} />
-        <LargeStat label="狀態版本" value={data.game.state.version} />
+      <CardContent className="p-6 lg:p-8">
+        <TimerBlock snapshot={data.game} />
       </CardContent>
     </Card>
   )
@@ -252,22 +234,12 @@ function TimerBlock({ snapshot }: { snapshot: GameStateResponse }) {
   const seconds = useRemainingSeconds(snapshot)
 
   return (
-    <div className="rounded-md border bg-muted/30 p-4">
-      <div className="flex items-center gap-2 text-lg text-muted-foreground">
-        <ClockIcon className="size-5" />
+    <div className="flex flex-col items-center justify-center gap-3 text-center">
+      <div className="flex items-center gap-2 text-xl text-muted-foreground lg:text-2xl">
+        <ClockIcon className="size-6 lg:size-7" />
         Timer
       </div>
-      <div className="mt-3 font-mono text-5xl font-semibold tabular-nums">{formatTimer(seconds)}</div>
-      <div className="mt-2 text-lg text-muted-foreground">server {formatClock(snapshot.state.server_now)}</div>
-    </div>
-  )
-}
-
-function LargeStat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="rounded-md border bg-muted/30 p-4">
-      <div className="text-lg text-muted-foreground">{label}</div>
-      <div className="mt-1 font-mono text-4xl font-semibold tabular-nums">{value}</div>
+      <div className="font-mono text-7xl font-semibold tabular-nums lg:text-8xl">{formatTimer(seconds)}</div>
     </div>
   )
 }
@@ -290,25 +262,9 @@ function countSubmissionsByTeam(submissions: GameSubmission[]) {
   return counts
 }
 
-function phaseLabel(phase: GamePhase) {
-  const labels: Record<GamePhase, string> = {
-    idle: "等待中",
-    submission_open: "小隊作畫",
-    team_selection: "隊內選拔",
-    public_voting: "公開投票",
-    scoring: "結算中",
-    round_complete: "回合結束",
-  }
-  return labels[phase]
-}
-
 function formatTimer(seconds: number | null) {
   if (seconds === null) return "--:--"
   const minutes = Math.floor(seconds / 60)
   const rest = seconds % 60
   return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`
-}
-
-function formatClock(value: string) {
-  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value))
 }
