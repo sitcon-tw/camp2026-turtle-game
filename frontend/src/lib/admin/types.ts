@@ -51,7 +51,6 @@ export type ChallengeSet = {
 export type ChallengeStats = {
   submission_count: number
   solved_count: number
-  best_similarity: number | null
 }
 
 export type Challenge = {
@@ -64,7 +63,6 @@ export type Challenge = {
   target_image_path: string | null
   target_image_url: string | null
   points: number
-  pass_threshold: number
   enabled: boolean
   order: number
   canvas: CanvasConfig

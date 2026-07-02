@@ -82,7 +82,6 @@ type ChallengeForm = {
   title: string
   description: string
   points: string
-  pass_threshold: string
   enabled: boolean
   order: string
 }
@@ -97,7 +96,6 @@ const emptyChallengeForm: ChallengeForm = {
   title: "",
   description: "",
   points: "100",
-  pass_threshold: "0.9",
   enabled: true,
   order: "1",
 }
@@ -107,10 +105,6 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value))
-}
-
-function formatPercent(value: number) {
-  return `${Math.round(value * 100)}%`
 }
 
 function statusVariant(status: ChallengeSet["status"]) {
@@ -136,7 +130,6 @@ function challengeToForm(challenge: Challenge): ChallengeForm {
     title: challenge.title,
     description: challenge.description,
     points: String(challenge.points),
-    pass_threshold: String(challenge.pass_threshold),
     enabled: challenge.enabled,
     order: String(challenge.order),
   }
@@ -281,7 +274,6 @@ export default function AdminChallengesPage() {
         title: form.title.trim(),
         description: form.description.trim(),
         points: Number(form.points),
-        pass_threshold: Number(form.pass_threshold),
         enabled: form.enabled,
         order: Number(form.order),
       }),
@@ -301,7 +293,6 @@ export default function AdminChallengesPage() {
         title: form.title.trim(),
         description: form.description.trim(),
         points: Number(form.points),
-        pass_threshold: Number(form.pass_threshold),
         enabled: form.enabled,
         order: Number(form.order),
       }),
@@ -1056,7 +1047,6 @@ function ChallengesTable({
           <TableHead>Order</TableHead>
           <TableHead>Challenge</TableHead>
           <TableHead className="text-right">Points</TableHead>
-          <TableHead>Pass</TableHead>
           <TableHead>Target</TableHead>
           <TableHead>Status</TableHead>
           <TableHead className="text-right">Actions</TableHead>
@@ -1073,7 +1063,6 @@ function ChallengesTable({
               </div>
             </TableCell>
             <TableCell className="text-right font-medium">{challenge.points}</TableCell>
-            <TableCell>{formatPercent(challenge.pass_threshold)}</TableCell>
             <TableCell>
               {challenge.target_image_asset_id ? (
                 <Badge variant="secondary">Uploaded</Badge>
@@ -1210,7 +1199,7 @@ function ChallengeFormFields({
             placeholder="Describe what teams should draw."
           />
         </Field>
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2">
           <Field>
             <FieldLabel htmlFor={`${mode}-challenge-points`}>Points</FieldLabel>
             <Input
@@ -1220,19 +1209,6 @@ function ChallengeFormFields({
               required
               value={form.points}
               onChange={(event) => onChange((current) => ({ ...current, points: event.target.value }))}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor={`${mode}-challenge-threshold`}>Pass threshold</FieldLabel>
-            <Input
-              id={`${mode}-challenge-threshold`}
-              type="number"
-              min="0"
-              max="1"
-              step="0.01"
-              required
-              value={form.pass_threshold}
-              onChange={(event) => onChange((current) => ({ ...current, pass_threshold: event.target.value }))}
             />
           </Field>
           <Field>

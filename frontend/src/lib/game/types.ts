@@ -24,7 +24,6 @@ export type GameChallenge = {
   target_image_path: string | null
   target_image_url: string | null
   points: number
-  pass_threshold: number
   enabled: boolean
   order: number
   canvas: CanvasConfig
@@ -48,10 +47,6 @@ export type GameSubmission = {
   result_image_path: string | null
   result_image_url: string | null
   trace: unknown | null
-  similarity: number | null
-  passed: boolean | null
-  judge_score: number | null
-  awarded_points: number | null
   error_message: string | null
   retry_of: string | null
   created_at: Timestamp
@@ -172,4 +167,3 @@ export type BlackboardState = {
   teams: BlackboardTeam[]
   leaderboard: LeaderboardEntry[]
 }
-

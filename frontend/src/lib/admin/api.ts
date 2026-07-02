@@ -143,7 +143,6 @@ export const adminApi = {
     title: string
     description: string
     points: number
-    pass_threshold: number
     enabled: boolean
     order: number
   }) {
@@ -154,7 +153,7 @@ export const adminApi = {
   },
   updateChallenge(
     id: string,
-    input: Partial<Pick<Challenge, "title" | "description" | "points" | "pass_threshold" | "enabled" | "order">>,
+    input: Partial<Pick<Challenge, "title" | "description" | "points" | "enabled" | "order">>,
   ) {
     return request<Challenge>(`/api/v1/admin/challenges/${id}`, { method: "PATCH", body: jsonBody(input) })
   },
