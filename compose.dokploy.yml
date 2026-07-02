@@ -1,0 +1,25 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: deploy/backend.Dockerfile
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 3000
+      AUTH_SECRET: ${AUTH_SECRET}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      TOKEN_TTL_SECONDS: ${TOKEN_TTL_SECONDS:-3600}
+      RUST_LOG: ${RUST_LOG:-backend=info}
+    expose:
+      - "3000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/frontend.Dockerfile
+    depends_on:
+      - backend
+    expose:
+      - "80"
+    restart: unless-stopped
