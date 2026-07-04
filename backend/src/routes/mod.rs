@@ -19,9 +19,6 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(health::router())
         .nest("/api/v1", api_v1_router())
-        .nest("/api/api/v1", api_v1_router())
-        .nest("/healthz", health::router())
-        .nest("/readyz", health::router())
         .fallback(global_not_found)
         .with_state(state)
 }
