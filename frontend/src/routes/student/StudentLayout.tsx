@@ -35,19 +35,19 @@ export default function StudentLayout() {
   }
 
   return (
-    <main className="min-h-svh bg-background">
-      <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur">
+    <main className="min-h-svh bg-paper text-ink">
+      <header className="sticky top-0 z-30 border-b-2 border-ink bg-surface-raised/95 shadow-[0_3px_0_rgba(23,35,58,0.12)] backdrop-blur">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
-          <Link to="/play" className="flex items-center gap-3 font-semibold">
-            <span className="flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+          <Link to="/play" className="flex items-center gap-3 font-black">
+            <span className="flex size-10 items-center justify-center rounded-[0.9rem] border-2 border-ink bg-primary text-primary-foreground shadow-[2px_2px_0_rgba(23,35,58,0.16)]">
               <TurtleIcon className="size-5" />
             </span>
             <span>Turtle Game</span>
           </Link>
           <div className="flex items-center gap-3">
             <div className="hidden text-right text-sm sm:block">
-              <p className="font-medium">{teamLabel}</p>
-              <p className="text-xs text-muted-foreground">Team Station</p>
+              <p className="font-black">{teamLabel}</p>
+              <p className="text-xs font-bold text-muted-foreground">Team Station</p>
             </div>
             <Button variant="outline" size="sm" onClick={logout}>
               <LogOutIcon /> 登出

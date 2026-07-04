@@ -41,11 +41,11 @@ export default function AdminLoginPage() {
   }
 
   return (
-    <main className="min-h-svh bg-background px-4 py-8">
+    <main className="min-h-svh bg-paper px-4 py-8 text-ink">
       <div className="mx-auto flex min-h-[calc(100svh-4rem)] w-full max-w-md flex-col justify-center">
-        <Card className="shadow-xl shadow-foreground/5">
+        <Card>
           <CardHeader className="text-center">
-            <div className="mx-auto mb-2 flex size-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+            <div className="mx-auto mb-2 flex size-12 items-center justify-center rounded-[1rem] border-2 border-ink bg-primary text-primary-foreground shadow-[2px_2px_0_rgba(23,35,58,0.16)]">
               <TurtleIcon className="size-6" />
             </div>
             <CardTitle className="text-2xl">Admin sign in</CardTitle>

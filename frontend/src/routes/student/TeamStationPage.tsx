@@ -209,7 +209,7 @@ export default function TeamStationPage() {
   }
 
   return (
-    <div className="mx-auto grid max-w-7xl gap-4 px-4 py-4 sm:px-6">
+    <div className="mx-auto grid max-w-7xl gap-5 px-4 py-5 sm:px-6">
       <RoundHeader
         snapshot={snapshot}
         team={myTeam}
@@ -354,22 +354,22 @@ function TimerCard({ snapshot }: { snapshot: GameStateResponse }) {
   const seconds = useRemainingSeconds(snapshot)
 
   return (
-    <div className="rounded-md border bg-muted/30 p-3">
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+    <div className="rounded-[1rem] border-2 border-ink bg-surface-raised p-3 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
+      <div className="flex items-center gap-2 text-sm font-black text-muted-foreground">
         <ClockIcon className="size-4" />
         Timer
       </div>
-      <div className="mt-2 font-mono text-3xl font-semibold tabular-nums">{formatTimer(seconds)}</div>
-      <div className="mt-1 text-xs text-muted-foreground">server {formatClock(snapshot.state.server_now)}</div>
+      <div className="mt-2 font-mono text-3xl font-black tabular-nums">{formatTimer(seconds)}</div>
+      <div className="mt-1 text-xs font-bold text-muted-foreground">server {formatClock(snapshot.state.server_now)}</div>
     </div>
   )
 }
 
 function StatTile({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-md border bg-muted/30 p-3">
-      <div className="text-sm text-muted-foreground">{label}</div>
-      <div className="mt-1 truncate text-lg font-semibold">{value}</div>
+    <div className="rounded-[1rem] border-2 border-ink bg-surface-raised p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]">
+      <div className="text-sm font-black text-muted-foreground">{label}</div>
+      <div className="mt-1 truncate text-lg font-black">{value}</div>
     </div>
   )
 }
@@ -427,16 +427,16 @@ function MySubmissionList({
       </CardHeader>
       <CardContent className="grid gap-3 pt-4">
         {submissions.length === 0 ? (
-          <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">尚未提交。</p>
+          <p className="rounded-[1rem] border-2 border-dashed border-border bg-surface-raised/70 p-4 text-sm font-semibold text-muted-foreground">尚未提交。</p>
         ) : (
           submissions.slice(0, 5).map((submission) => (
-            <div key={submission.id} className="flex items-center justify-between gap-3 rounded-md border p-3">
+            <div key={submission.id} className="flex items-center justify-between gap-3 rounded-[1rem] border-2 border-ink bg-surface-raised p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="truncate font-medium">#{submission.id.slice(0, 8)}</span>
+                  <span className="truncate font-black">#{submission.id.slice(0, 8)}</span>
                   {selectedSubmissionId === submission.id ? <Badge variant="secondary">代表</Badge> : null}
                 </div>
-                <div className="text-sm text-muted-foreground">{formatSubmissionStatus(submission)}</div>
+                <div className="text-sm font-semibold text-muted-foreground">{formatSubmissionStatus(submission)}</div>
               </div>
               <Badge variant="outline">{formatTime(submission.created_at)}</Badge>
             </div>
@@ -467,7 +467,7 @@ function VotingSubmissionCard({
   onAction: () => void
 }) {
   return (
-    <div className="grid gap-3 rounded-md border p-3">
+    <div className="grid gap-3 rounded-[1rem] border-2 border-ink bg-surface-raised p-3 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
       <TurtlePreviewPanel
         program={submission.block_program}
         trace={submission.trace}
@@ -648,11 +648,11 @@ function ResultsPanel({
             snapshot.results.map((result) => {
               const submission = submissionsById.get(result.submission_id)
               return (
-                <div key={result.submission_id} className="grid gap-3 rounded-md border p-3">
+                <div key={result.submission_id} className="grid gap-3 rounded-[1rem] border-2 border-ink bg-surface-raised p-3 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <div className="font-semibold">#{result.rank}</div>
-                      <div className="text-sm text-muted-foreground">
+                      <div className="font-black">#{result.rank}</div>
+                      <div className="text-sm font-semibold text-muted-foreground">
                         {teamNameById.get(result.team_id) ?? `Team ${result.team_id.slice(0, 6)}`}
                       </div>
                     </div>
@@ -683,12 +683,12 @@ function ResultsPanel({
         </CardHeader>
         <CardContent className="grid gap-2 pt-4">
           {leaderboard.slice(0, 10).map((team) => (
-            <div key={team.team_id} className="flex items-center justify-between gap-3 rounded-md border p-3">
+            <div key={team.team_id} className="flex items-center justify-between gap-3 rounded-[1rem] border-2 border-ink bg-surface-raised p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]">
               <div className="min-w-0">
-                <div className="font-medium">#{team.rank} {team.team_name}</div>
-                <div className="text-sm text-muted-foreground">解出 {team.solved_count}</div>
+                <div className="font-black">#{team.rank} {team.team_name}</div>
+                <div className="text-sm font-semibold text-muted-foreground">解出 {team.solved_count}</div>
               </div>
-              <div className="font-mono text-xl font-semibold tabular-nums">{team.total_score}</div>
+              <div className="font-mono text-xl font-black tabular-nums">{team.total_score}</div>
             </div>
           ))}
         </CardContent>

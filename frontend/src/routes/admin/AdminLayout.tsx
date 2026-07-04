@@ -93,7 +93,7 @@ export default function AdminLayout() {
 
   if (checking) {
     return (
-      <main className="min-h-svh bg-muted/30 p-4 sm:p-8">
+      <main className="min-h-svh bg-paper p-4 text-ink sm:p-8">
         <div className="mx-auto max-w-3xl">
           <LoadingState title="Opening admin" description="Checking your admin session." rows={4} />
         </div>
@@ -112,7 +112,7 @@ export default function AdminLayout() {
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton size="lg" tooltip="Turtle admin" render={<Link to="/admin" />}>
-                <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                <span className="flex size-8 items-center justify-center rounded-[0.75rem] border-2 border-ink bg-primary text-primary-foreground shadow-[2px_2px_0_rgba(23,35,58,0.16)]">
                   <TurtleIcon className="size-4" />
                 </span>
                 <span className="grid flex-1 text-left leading-tight">
@@ -159,7 +159,7 @@ export default function AdminLayout() {
         <SidebarRail />
       </Sidebar>
       <SidebarInset>
-        <header className="sticky top-0 z-10 flex h-14 items-center gap-3 border-b bg-background/90 px-4 backdrop-blur sm:px-6">
+        <header className="sticky top-0 z-10 flex h-14 items-center gap-3 border-b-2 border-ink bg-surface-raised/95 px-4 shadow-[0_3px_0_rgba(23,35,58,0.12)] backdrop-blur sm:px-6">
           <SidebarTrigger />
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="min-w-0">
@@ -172,7 +172,7 @@ export default function AdminLayout() {
             <ArrowLeftIcon /> Home
           </Button>
         </header>
-        <main className="flex-1 bg-muted/20 p-4 sm:p-6">
+        <main className="flex-1 bg-paper p-4 sm:p-6">
           <Outlet />
         </main>
       </SidebarInset>

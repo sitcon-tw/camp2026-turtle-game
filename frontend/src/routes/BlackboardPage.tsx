@@ -244,7 +244,7 @@ function IdleView({ data }: { data: BlackboardState }) {
       title="等待回合開始"
       subtitle={data.game.challenge ? data.game.challenge.title : "Idle"}
     >
-      <div className="flex h-full min-h-0 items-center justify-center rounded-md border border-dashed bg-muted/20">
+      <div className="flex h-full min-h-0 items-center justify-center rounded-[1rem] border-2 border-dashed border-border bg-surface-raised/70">
         <Empty>
           <EmptyHeader>
             <EmptyTitle className="text-4xl">等待回合開始</EmptyTitle>
@@ -258,7 +258,7 @@ function IdleView({ data }: { data: BlackboardState }) {
 
 function BoardShell({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
   return (
-    <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-md border bg-card p-3 text-card-foreground ring-1 ring-foreground/5">
+    <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-[1.375rem] border-2 border-ink bg-card p-3 text-card-foreground shadow-[4px_4px_0_rgba(23,35,58,0.12)]">
       <header className="min-w-0 pr-36 lg:pr-44">
         <div className="truncate text-2xl font-semibold leading-tight lg:text-4xl">{title}</div>
         <div className="mt-1 truncate text-sm text-muted-foreground lg:text-base">{subtitle}</div>
@@ -289,7 +289,7 @@ function AdaptiveArtworkGrid({
 
   if (items.length === 0) {
     return (
-      <div className="flex h-full min-h-0 items-center justify-center rounded-md border border-dashed bg-muted/20">
+      <div className="flex h-full min-h-0 items-center justify-center rounded-[1rem] border-2 border-dashed border-border bg-surface-raised/70">
         <Empty>
           <EmptyHeader>
             <EmptyTitle>沒有啟用隊伍</EmptyTitle>
@@ -342,7 +342,7 @@ ref,
     <article
       ref={ref}
       className={cn(
-        "animate-in fade-in zoom-in-95 grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-md border bg-muted/20 duration-300",
+        "animate-in fade-in zoom-in-95 grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-[1rem] border-2 border-ink bg-surface-raised duration-300 shadow-[3px_3px_0_rgba(23,35,58,0.12)]",
         mode === "voting" ? "will-change-transform" : undefined,
         item.highlight ? "ring-2 ring-primary/30" : undefined,
       )}
@@ -354,10 +354,10 @@ ref,
         aspectRatio={aspectRatio}
         animated={mode === "submission"}
       />
-      <footer className="grid min-h-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t bg-card/85 px-3 py-2">
+      <footer className="grid min-h-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t-2 border-ink bg-card/90 px-3 py-2">
         <div className="min-w-0">
-          <div className="truncate text-base font-semibold lg:text-xl">{item.team.name}</div>
-          <div className="truncate text-xs text-muted-foreground lg:text-sm">{item.meta}</div>
+          <div className="truncate text-base font-black lg:text-xl">{item.team.name}</div>
+          <div className="truncate text-xs font-semibold text-muted-foreground lg:text-sm">{item.meta}</div>
         </div>
         <Badge
           variant={item.highlight ? "default" : "secondary"}
@@ -388,7 +388,7 @@ function SubmissionArtwork({
     return (
       <div className="flex h-full min-h-0 w-full items-center justify-center overflow-hidden p-3" style={{ containerType: "size" }}>
         <div
-          className="flex items-center justify-center rounded-md border border-dashed bg-background text-center text-sm text-muted-foreground"
+          className="flex items-center justify-center rounded-[1rem] border-2 border-dashed border-border bg-background text-center text-sm font-semibold text-muted-foreground"
           style={canvasFrameStyle(aspectRatio)}
         >
           作品尚未載入
@@ -400,7 +400,7 @@ function SubmissionArtwork({
   return (
     <div className="flex h-full min-h-0 w-full items-center justify-center overflow-hidden p-2" style={{ containerType: "size" }}>
       <div
-        className="overflow-hidden rounded-md border bg-background shadow-sm"
+        className="overflow-hidden rounded-[1rem] border-2 border-ink bg-background shadow-[2px_2px_0_rgba(23,35,58,0.1)]"
         style={canvasFrameStyle(aspectRatio)}
       >
         <ChallengeRenderer
@@ -453,7 +453,7 @@ function RoundCompleteSequence({
       {showLeaderboard ? (
         <LeaderboardPanel leaderboard={leaderboard} results={results} />
       ) : (
-        <div className="hidden min-h-0 rounded-md border bg-muted/20 lg:block" />
+        <div className="hidden min-h-0 rounded-[1rem] border-2 border-dashed border-border bg-surface-raised/70 lg:block" />
       )}
     </div>
   )
@@ -474,7 +474,7 @@ function WinnerPanel({
 
   if (!result) {
     return (
-      <div className="flex h-full min-h-0 items-center justify-center rounded-md border border-dashed bg-muted/20">
+      <div className="flex h-full min-h-0 items-center justify-center rounded-[1rem] border-2 border-dashed border-border bg-surface-raised/70">
         <Empty>
           <EmptyHeader>
             <EmptyTitle>等待結算</EmptyTitle>
@@ -486,8 +486,8 @@ function WinnerPanel({
   }
 
   return (
-    <section className="animate-in fade-in zoom-in-95 grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-md border bg-muted/20 duration-700">
-      <div className="flex min-w-0 items-center justify-between gap-4 border-b bg-card/85 px-4 py-3">
+    <section className="animate-in fade-in zoom-in-95 grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[1rem] border-2 border-ink bg-surface-raised duration-700 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
+      <div className="flex min-w-0 items-center justify-between gap-4 border-b-2 border-ink bg-card/90 px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
             <CrownIcon data-icon="inline-start" />
@@ -506,7 +506,7 @@ function WinnerPanel({
         aspectRatio={challengeAspectRatio(challenge)}
         animated
       />
-      <div className="grid grid-cols-3 gap-2 border-t bg-card/85 px-4 py-3 text-center">
+      <div className="grid grid-cols-3 gap-2 border-t-2 border-ink bg-card/90 px-4 py-3 text-center">
         <ResultStat label="得票" value={result.vote_count} />
         <ResultStat label="名次分" value={`+${result.placement_points}`} />
         <ResultStat label="連勝加分" value={`+${result.streak_bonus}`} detail={`${totalPoints} total`} />
@@ -517,7 +517,7 @@ function WinnerPanel({
 
 function ResultStat({ label, value, detail }: { label: string; value: string | number; detail?: string }) {
   return (
-    <div className="min-w-0 rounded-md border bg-background/70 px-2 py-2">
+    <div className="min-w-0 rounded-[0.875rem] border border-border bg-background/80 px-2 py-2 shadow-[1px_1px_0_rgba(23,35,58,0.08)]">
       <div className="truncate text-xs text-muted-foreground">{label}</div>
       <div className="truncate font-mono text-2xl font-semibold tabular-nums lg:text-3xl">{value}</div>
       {detail ? <div className="truncate text-xs text-muted-foreground">{detail}</div> : null}
@@ -530,8 +530,8 @@ function LeaderboardPanel({ leaderboard, results }: { leaderboard: LeaderboardEn
   const rows = leaderboard.length > 0 ? leaderboard : []
 
   return (
-    <section className="animate-in fade-in slide-in-from-right-4 grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-md border bg-card duration-700">
-      <header className="flex items-center justify-between gap-4 border-b px-4 py-3">
+    <section className="animate-in fade-in slide-in-from-right-4 grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[1rem] border-2 border-ink bg-surface-raised duration-700 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
+      <header className="flex items-center justify-between gap-4 border-b-2 border-ink bg-card/90 px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
             <TrophyIcon data-icon="inline-start" />
@@ -542,7 +542,9 @@ function LeaderboardPanel({ leaderboard, results }: { leaderboard: LeaderboardEn
       </header>
       <div className="grid min-h-0 gap-2 p-3" style={{ gridTemplateRows: `repeat(${Math.max(rows.length, 1)}, minmax(0, 1fr))` }}>
         {rows.length === 0 ? (
-          <div className="flex items-center justify-center rounded-md border border-dashed text-muted-foreground">尚無分數</div>
+          <div className="flex items-center justify-center rounded-[0.875rem] border-2 border-dashed border-border bg-background/70 text-muted-foreground">
+            尚無分數
+          </div>
         ) : (
           rows.map((team, index) => {
             const roundResult = resultByTeam.get(team.team_id)
@@ -552,7 +554,7 @@ function LeaderboardPanel({ leaderboard, results }: { leaderboard: LeaderboardEn
               <div
                 key={team.team_id}
                 className={cn(
-                  "animate-in fade-in slide-in-from-bottom-3 grid min-h-0 grid-cols-[3.25rem_minmax(0,1fr)_auto] items-center gap-3 rounded-md border bg-muted/30 px-3 py-2 duration-500",
+                  "animate-in fade-in slide-in-from-bottom-3 grid min-h-0 grid-cols-[3.25rem_minmax(0,1fr)_auto] items-center gap-3 rounded-[0.875rem] border border-border bg-background/75 px-3 py-2 duration-500 shadow-[1px_1px_0_rgba(23,35,58,0.08)]",
                   displayRank === 1 ? "ring-2 ring-primary/25" : undefined,
                 )}
                 style={{ animationDelay: `${index * 120}ms` }}
@@ -578,7 +580,7 @@ function TimerBlock({ snapshot }: { snapshot: GameStateResponse }) {
   const seconds = useRemainingSeconds(snapshot)
 
   return (
-    <div className="absolute right-5 top-5 flex items-center gap-2 rounded-md border bg-card/95 px-3 py-2 shadow-sm">
+    <div className="absolute right-5 top-5 flex items-center gap-2 rounded-[1rem] border border-border bg-card/95 px-3 py-2 shadow-[2px_2px_0_rgba(23,35,58,0.1)]">
       <ClockIcon data-icon="inline-start" />
       <div className="font-mono text-2xl font-semibold tabular-nums lg:text-3xl">{formatTimer(seconds)}</div>
     </div>

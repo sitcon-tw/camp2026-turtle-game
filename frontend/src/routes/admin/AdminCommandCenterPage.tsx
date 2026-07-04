@@ -276,22 +276,22 @@ function CommandHeader({
 function HeaderTimer({ snapshot }: { snapshot: GameStateResponse }) {
   const seconds = useRemainingSeconds(snapshot)
   return (
-    <div className="rounded-md border bg-muted/30 p-3">
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+    <div className="rounded-[1rem] border-2 border-ink bg-surface-raised p-3 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
+      <div className="flex items-center gap-2 text-sm font-black text-muted-foreground">
         <ClockIcon className="size-4" />
         Timer
       </div>
-      <div className="mt-2 font-mono text-3xl font-semibold tabular-nums">{formatTimer(seconds)}</div>
-      <div className="mt-1 text-xs text-muted-foreground">server {formatClock(snapshot.state.server_now)}</div>
+      <div className="mt-2 font-mono text-3xl font-black tabular-nums">{formatTimer(seconds)}</div>
+      <div className="mt-1 text-xs font-bold text-muted-foreground">server {formatClock(snapshot.state.server_now)}</div>
     </div>
   )
 }
 
 function StatTile({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-md border bg-muted/30 p-3">
-      <div className="text-sm text-muted-foreground">{label}</div>
-      <div className="mt-1 truncate text-lg font-semibold">{value}</div>
+    <div className="rounded-[1rem] border-2 border-ink bg-surface-raised p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]">
+      <div className="text-sm font-black text-muted-foreground">{label}</div>
+      <div className="mt-1 truncate text-lg font-black">{value}</div>
     </div>
   )
 }
@@ -312,10 +312,10 @@ function StartRoundPanel({
   onStart: () => void
 }) {
   return (
-    <div className="rounded-md border p-4">
+    <div className="rounded-[1rem] border-2 border-ink bg-surface-raised p-4 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
       <div className="mb-4">
-        <h2 className="font-semibold">Start Round</h2>
-        <p className="text-sm text-muted-foreground">Uses enabled challenges from the active challenge set.</p>
+        <h2 className="font-black">Start Round</h2>
+        <p className="text-sm font-semibold text-muted-foreground">Uses enabled challenges from the active challenge set.</p>
       </div>
       <FieldGroup>
         <Field>
@@ -382,10 +382,10 @@ function TimerPanel({
   const canExtend = Boolean(snapshot.state.phase_ends_at)
 
   return (
-    <div className="rounded-md border p-4">
+    <div className="rounded-[1rem] border-2 border-ink bg-surface-raised p-4 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
       <div className="mb-4">
-        <h2 className="font-semibold">Timer</h2>
-        <p className="text-sm text-muted-foreground">Current phase deadline is extended from the later of server time or deadline.</p>
+        <h2 className="font-black">Timer</h2>
+        <p className="text-sm font-semibold text-muted-foreground">Current phase deadline is extended from the later of server time or deadline.</p>
       </div>
       <FieldGroup>
         <Field>
@@ -463,9 +463,9 @@ function PhaseTimeline({ phase }: { phase: GamePhase }) {
   return (
     <div className="grid gap-2 sm:grid-cols-4">
       {phases.map((item, index) => (
-        <div key={item} className="rounded-md border bg-muted/30 p-3">
-          <div className="text-sm text-muted-foreground">Step {index + 1}</div>
-          <div className="font-medium">{phaseLabel(item)}</div>
+        <div key={item} className="rounded-[1rem] border-2 border-ink bg-surface-raised p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]">
+          <div className="text-sm font-black text-muted-foreground">Step {index + 1}</div>
+          <div className="font-black">{phaseLabel(item)}</div>
           <Badge className="mt-2" variant={index === currentIndex ? "secondary" : index < currentIndex ? "outline" : "outline"}>
             {index === currentIndex ? "Current" : index < currentIndex ? "Done" : "Pending"}
           </Badge>
