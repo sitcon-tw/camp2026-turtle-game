@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr, time::Duration};
+use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 
 use thiserror::Error;
 
@@ -7,6 +7,7 @@ pub struct Config {
     pub bind_addr: SocketAddr,
     pub auth_secret: String,
     pub token_ttl: Duration,
+    pub data_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -38,11 +39,13 @@ impl Config {
                 return Err(ConfigError::NonUnicode("TOKEN_TTL_SECONDS"));
             }
         };
+        let data_dir = optional_env("DATA_DIR")?.map(PathBuf::from).or(default.data_dir);
 
         Ok(Self {
             bind_addr,
             auth_secret,
             token_ttl: Duration::from_secs(token_ttl_seconds),
+            data_dir,
         })
     }
 }
@@ -61,6 +64,7 @@ impl Default for Config {
             bind_addr: SocketAddr::from(([127, 0, 0, 1], 3000)),
             auth_secret: "development-secret-change-me".to_owned(),
             token_ttl: Duration::from_secs(60 * 60),
+            data_dir: None,
         }
     }
 }

@@ -1,5 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
 
@@ -41,9 +43,22 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: Config) -> Self {
         let auth_secret: Arc<str> = Arc::from(config.auth_secret.clone());
+        let data_dir = config.data_dir.clone();
         let config = Arc::new(config);
-        let repository: Arc<dyn Repository> = Arc::new(InMemoryDatabase::default());
-        let asset_storage = InMemoryStorage::default();
+        let (repository, asset_storage, game): (Arc<dyn Repository>, InMemoryStorage, GameStore) =
+            if let Some(data_dir) = data_dir {
+                (
+                    Arc::new(InMemoryDatabase::from_file(data_dir.join("store.json"))),
+                    InMemoryStorage::from_file(data_dir.join("assets.json")),
+                    GameStore::from_file(data_dir.join("game.json")),
+                )
+            } else {
+                (
+                    Arc::new(InMemoryDatabase::default()),
+                    InMemoryStorage::default(),
+                    GameStore::default(),
+                )
+            };
         let services = AppServices::in_memory_with_handles(
             repository.clone(),
             Arc::new(asset_storage.clone()),
@@ -59,7 +74,7 @@ impl AppState {
             repository,
             asset_storage,
             services,
-            game: GameStore::default(),
+            game,
         }
     }
 
@@ -388,9 +403,20 @@ pub struct StartRoundInput {
 #[derive(Debug, Default, Clone)]
 pub struct GameStore {
     inner: Arc<RwLock<GameInner>>,
+    persistence_path: Option<Arc<PathBuf>>,
 }
 
 impl GameStore {
+    pub fn from_file(path: PathBuf) -> Self {
+        let inner = read_json::<PersistedGameInner>(&path)
+            .map(GameInner::from)
+            .unwrap_or_default();
+        Self {
+            inner: Arc::new(RwLock::new(inner)),
+            persistence_path: Some(Arc::new(path)),
+        }
+    }
+
     pub fn snapshot(
         &self,
         repository: &dyn Repository,
@@ -488,7 +514,9 @@ impl GameStore {
         inner.updated_by = input.created_by;
         inner.version = inner.version.saturating_add(1);
         inner.rounds.insert(round.id, round);
-        Ok(inner.view(now))
+        let view = inner.view(now);
+        self.persist_inner(&inner)?;
+        Ok(view)
     }
 
     pub fn update_timer(
@@ -516,7 +544,9 @@ impl GameStore {
         inner.updated_at = now;
         inner.updated_by = updated_by;
         inner.version = inner.version.saturating_add(1);
-        Ok(inner.view(now))
+        let view = inner.view(now);
+        self.persist_inner(&inner)?;
+        Ok(view)
     }
 
     pub fn set_phase(
@@ -526,7 +556,9 @@ impl GameStore {
     ) -> Result<GameStateView, GameError> {
         let mut inner = self.write_inner()?;
         let now = Utc::now();
-        Self::apply_phase_change(&mut inner, phase, now, updated_by)
+        let view = Self::apply_phase_change(&mut inner, phase, now, updated_by)?;
+        self.persist_inner(&inner)?;
+        Ok(view)
     }
 
     pub fn auto_advance_phase(
@@ -553,7 +585,10 @@ impl GameStore {
             now,
             Some("system:auto-advance".to_owned()),
         )
-        .map(Some)
+        .and_then(|view| {
+            self.persist_inner(&inner)?;
+            Ok(Some(view))
+        })
     }
 
     pub fn is_round_submission(&self, submission_id: SubmissionId) -> Result<bool, GameError> {
@@ -579,7 +614,9 @@ impl GameStore {
         inner.round_submissions.insert(submission.id, round_id);
         inner.version = inner.version.saturating_add(1);
         inner.updated_at = now;
-        Ok(inner.view(now))
+        let view = inner.view(now);
+        self.persist_inner(&inner)?;
+        Ok(view)
     }
 
     pub fn record_team_selection_vote(
@@ -625,7 +662,9 @@ impl GameStore {
         inner.lock_nominations(round_id, now);
         inner.version = inner.version.saturating_add(1);
         inner.updated_at = now;
-        Ok((vote, inner.view(now)))
+        let view = inner.view(now);
+        self.persist_inner(&inner)?;
+        Ok((vote, view))
     }
 
     pub fn record_public_vote(
@@ -677,7 +716,9 @@ impl GameStore {
         inner.public_votes.insert((round_id, team_id), vote.clone());
         inner.version = inner.version.saturating_add(1);
         inner.updated_at = now;
-        Ok((vote, inner.view(now)))
+        let view = inner.view(now);
+        self.persist_inner(&inner)?;
+        Ok((vote, view))
     }
 
     pub fn score_current_round(
@@ -784,7 +825,9 @@ impl GameStore {
         inner.version = inner.version.saturating_add(1);
         inner.updated_at = now;
         inner.updated_by = created_by;
-        Ok((results, inner.view(now)))
+        let view = inner.view(now);
+        self.persist_inner(&inner)?;
+        Ok((results, view))
     }
 
     fn read_inner(&self) -> Result<std::sync::RwLockReadGuard<'_, GameInner>, GameError> {
@@ -792,6 +835,16 @@ impl GameStore {
     }
     fn write_inner(&self) -> Result<std::sync::RwLockWriteGuard<'_, GameInner>, GameError> {
         self.inner.write().map_err(|_| GameError::LockUnavailable)
+    }
+
+    fn persist_inner(&self, inner: &GameInner) -> Result<(), GameError> {
+        let Some(path) = self.persistence_path.as_ref() else {
+            return Ok(());
+        };
+        atomic_write_json(path, &PersistedGameInner::from(inner)).map_err(|_| {
+            tracing::warn!(path = %path.display(), "failed to persist game snapshot");
+            GameError::LockUnavailable
+        })
     }
 
     fn apply_phase_change(
@@ -834,6 +887,103 @@ impl GameStore {
         inner.updated_by = updated_by;
         inner.version = inner.version.saturating_add(1);
         Ok(inner.view(now))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PersistedGameInner {
+    version: i64,
+    phase: GamePhase,
+    current_round_id: Option<RoundId>,
+    current_challenge_id: Option<ChallengeId>,
+    phase_started_at: DateTime<Utc>,
+    phase_ends_at: Option<DateTime<Utc>>,
+    public_votes_per_team: u8,
+    team_selection_seconds: i64,
+    updated_at: DateTime<Utc>,
+    updated_by: Option<String>,
+    rounds: Vec<Round>,
+    round_submissions: Vec<(SubmissionId, RoundId)>,
+    team_selection_votes: Vec<TeamSelectionVote>,
+    nominations: Vec<TeamNomination>,
+    public_votes: Vec<PublicVote>,
+    results: Vec<(RoundId, Vec<RoundResultEntry>)>,
+    top_three_streaks: Vec<(TeamId, u32)>,
+}
+
+impl From<&GameInner> for PersistedGameInner {
+    fn from(inner: &GameInner) -> Self {
+        Self {
+            version: inner.version,
+            phase: inner.phase,
+            current_round_id: inner.current_round_id,
+            current_challenge_id: inner.current_challenge_id,
+            phase_started_at: inner.phase_started_at,
+            phase_ends_at: inner.phase_ends_at,
+            public_votes_per_team: inner.public_votes_per_team,
+            team_selection_seconds: inner.team_selection_seconds,
+            updated_at: inner.updated_at,
+            updated_by: inner.updated_by.clone(),
+            rounds: inner.rounds.values().cloned().collect(),
+            round_submissions: inner
+                .round_submissions
+                .iter()
+                .map(|(submission_id, round_id)| (*submission_id, *round_id))
+                .collect(),
+            team_selection_votes: inner.team_selection_votes.values().cloned().collect(),
+            nominations: inner.nominations.values().cloned().collect(),
+            public_votes: inner.public_votes.values().cloned().collect(),
+            results: inner
+                .results
+                .iter()
+                .map(|(round_id, results)| (*round_id, results.clone()))
+                .collect(),
+            top_three_streaks: inner
+                .top_three_streaks
+                .iter()
+                .map(|(team_id, streak)| (*team_id, *streak))
+                .collect(),
+        }
+    }
+}
+
+impl From<PersistedGameInner> for GameInner {
+    fn from(persisted: PersistedGameInner) -> Self {
+        Self {
+            version: persisted.version,
+            phase: persisted.phase,
+            current_round_id: persisted.current_round_id,
+            current_challenge_id: persisted.current_challenge_id,
+            phase_started_at: persisted.phase_started_at,
+            phase_ends_at: persisted.phase_ends_at,
+            public_votes_per_team: persisted.public_votes_per_team,
+            team_selection_seconds: persisted.team_selection_seconds,
+            updated_at: persisted.updated_at,
+            updated_by: persisted.updated_by,
+            rounds: persisted
+                .rounds
+                .into_iter()
+                .map(|round| (round.id, round))
+                .collect(),
+            round_submissions: persisted.round_submissions.into_iter().collect(),
+            team_selection_votes: persisted
+                .team_selection_votes
+                .into_iter()
+                .map(|vote| ((vote.round_id, vote.team_id, vote.device_id.clone()), vote))
+                .collect(),
+            nominations: persisted
+                .nominations
+                .into_iter()
+                .map(|nomination| ((nomination.round_id, nomination.team_id), nomination))
+                .collect(),
+            public_votes: persisted
+                .public_votes
+                .into_iter()
+                .map(|vote| ((vote.round_id, vote.voter_team_id), vote))
+                .collect(),
+            results: persisted.results.into_iter().collect(),
+            top_three_streaks: persisted.top_three_streaks.into_iter().collect(),
+        }
     }
 }
 
@@ -1023,6 +1173,40 @@ impl GameInner {
 pub enum ServiceReadiness {
     Ok,
     Unavailable(String),
+}
+
+fn read_json<T>(path: &Path) -> Option<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if !path.exists() {
+        return None;
+    }
+    match fs::read(path).and_then(|bytes| {
+        serde_json::from_slice(&bytes).map_err(|error| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+        })
+    }) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "failed to load persistence snapshot");
+            None
+        }
+    }
+}
+
+fn atomic_write_json<T>(path: &Path, value: &T) -> std::io::Result<()>
+where
+    T: Serialize,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp_path = path.with_extension("tmp");
+    let bytes = serde_json::to_vec_pretty(value).map_err(std::io::Error::other)?;
+    fs::write(&tmp_path, bytes)?;
+    fs::rename(tmp_path, path)?;
+    Ok(())
 }
 
 impl ServiceReadiness {
@@ -1230,6 +1414,7 @@ pub struct CompletedSubmission {
 #[derive(Debug, Default, Clone)]
 pub struct InMemoryDatabase {
     inner: Arc<RwLock<StoreInner>>,
+    persistence_path: Option<Arc<PathBuf>>,
 }
 
 impl Repository for InMemoryDatabase {
@@ -1480,6 +1665,16 @@ impl Repository for InMemoryDatabase {
 }
 
 impl InMemoryDatabase {
+    pub fn from_file(path: PathBuf) -> Self {
+        let inner = read_json::<PersistedStoreInner>(&path)
+            .map(StoreInner::from)
+            .unwrap_or_default();
+        Self {
+            inner: Arc::new(RwLock::new(inner)),
+            persistence_path: Some(Arc::new(path)),
+        }
+    }
+
     pub fn create_team(
         &self,
         name: impl Into<String>,
@@ -1505,6 +1700,7 @@ impl InMemoryDatabase {
         };
         inner.login_codes.insert(login_code, team.id);
         inner.teams.insert(team.id, team.clone());
+        self.persist_inner(&inner)?;
         Ok(team)
     }
 
@@ -1538,7 +1734,9 @@ impl InMemoryDatabase {
             .ok_or(StoreError::NotFound { entity: "team" })?;
         team.enabled = enabled;
         team.updated_at = Utc::now();
-        Ok(team.clone())
+        let team = team.clone();
+        self.persist_inner(&inner)?;
+        Ok(team)
     }
 
     pub fn update_team(&self, team_id: TeamId, update: TeamUpdate) -> Result<Team, StoreError> {
@@ -1585,6 +1783,7 @@ impl InMemoryDatabase {
             inner.login_codes.insert(login_code, team_id);
         }
 
+        self.persist_inner(&inner)?;
         Ok(team)
     }
 
@@ -1610,6 +1809,7 @@ impl InMemoryDatabase {
         inner
             .challenge_sets
             .insert(challenge_set.id, challenge_set.clone());
+        self.persist_inner(&inner)?;
         Ok(challenge_set)
     }
 
@@ -1635,7 +1835,9 @@ impl InMemoryDatabase {
                 })?;
         challenge_set.status = ChallengeSetStatus::Active;
         challenge_set.updated_at = now;
-        Ok(challenge_set.clone())
+        let challenge_set = challenge_set.clone();
+        self.persist_inner(&inner)?;
+        Ok(challenge_set)
     }
 
     pub fn get_challenge_set(
@@ -1696,7 +1898,9 @@ impl InMemoryDatabase {
 
         challenge_set.status = ChallengeSetStatus::Archived;
         challenge_set.updated_at = Utc::now();
-        Ok(challenge_set.clone())
+        let challenge_set = challenge_set.clone();
+        self.persist_inner(&inner)?;
+        Ok(challenge_set)
     }
 
     pub fn create_challenge(&self, input: NewChallenge) -> Result<Challenge, StoreError> {
@@ -1732,6 +1936,7 @@ impl InMemoryDatabase {
         };
         inner.challenge_slugs.insert(slug_key, challenge.id);
         inner.challenges.insert(challenge.id, challenge.clone());
+        self.persist_inner(&inner)?;
         Ok(challenge)
     }
 
@@ -1795,7 +2000,9 @@ impl InMemoryDatabase {
             challenge.order = order;
         }
         challenge.updated_at = Utc::now();
-        Ok(challenge.clone())
+        let challenge = challenge.clone();
+        self.persist_inner(&inner)?;
+        Ok(challenge)
     }
 
     pub fn update_challenge_target_image(
@@ -1814,7 +2021,9 @@ impl InMemoryDatabase {
         challenge.target_image_path = Some(update.target_image_path);
         challenge.target_image_url = update.target_image_url;
         challenge.updated_at = Utc::now();
-        Ok(challenge.clone())
+        let challenge = challenge.clone();
+        self.persist_inner(&inner)?;
+        Ok(challenge)
     }
 
     pub fn disable_challenge(&self, challenge_id: ChallengeId) -> Result<Challenge, StoreError> {
@@ -1855,6 +2064,7 @@ impl InMemoryDatabase {
             updated.push(challenge.clone());
         }
         sort_challenges(&mut updated);
+        self.persist_inner(&inner)?;
         Ok(updated)
     }
 
@@ -1874,7 +2084,7 @@ impl InMemoryDatabase {
         }
 
         let mut submission_count = 0_usize;
-        for submission in inner.submissions.values().filter(|submission| {
+        for _submission in inner.submissions.values().filter(|submission| {
             submission.team_id == team_id && submission.challenge_id == challenge_id
         }) {
             submission_count = submission_count.saturating_add(1);
@@ -1977,6 +2187,7 @@ impl InMemoryDatabase {
         };
         inner.last_submission_at.insert(team_id, now);
         inner.submissions.insert(submission.id, submission.clone());
+        self.persist_inner(&inner)?;
         Ok(submission)
     }
 
@@ -2047,7 +2258,9 @@ impl InMemoryDatabase {
         submission.status = SubmissionStatus::Cancelled;
         submission.updated_at = now;
         submission.cancelled_at = Some(now);
-        Ok(submission.clone())
+        let submission = submission.clone();
+        self.persist_inner(&inner)?;
+        Ok(submission)
     }
 
     pub fn prioritize_submission(
@@ -2067,7 +2280,9 @@ impl InMemoryDatabase {
         }
         submission.priority = priority;
         submission.updated_at = Utc::now();
-        Ok(submission.clone())
+        let submission = submission.clone();
+        self.persist_inner(&inner)?;
+        Ok(submission)
     }
 
     pub fn pop_next_queued_submission(&self) -> Result<Option<Submission>, StoreError> {
@@ -2096,7 +2311,9 @@ impl InMemoryDatabase {
         submission.status = SubmissionStatus::Running;
         submission.started_at = Some(now);
         submission.updated_at = now;
-        Ok(Some(submission.clone()))
+        let submission = submission.clone();
+        self.persist_inner(&inner)?;
+        Ok(Some(submission))
     }
 
     pub fn mark_submission_running(
@@ -2114,7 +2331,9 @@ impl InMemoryDatabase {
         submission.status = SubmissionStatus::Running;
         submission.started_at = submission.started_at.or(Some(now));
         submission.updated_at = now;
-        Ok(submission.clone())
+        let submission = submission.clone();
+        self.persist_inner(&inner)?;
+        Ok(submission)
     }
 
     pub fn mark_submission_completed(
@@ -2137,7 +2356,9 @@ impl InMemoryDatabase {
         submission.result_image_url = result.result_image_url;
         submission.updated_at = now;
         submission.completed_at = Some(now);
-        Ok(submission.clone())
+        let submission = submission.clone();
+        self.persist_inner(&inner)?;
+        Ok(submission)
     }
 
     pub fn mark_submission_failed(
@@ -2157,7 +2378,9 @@ impl InMemoryDatabase {
         submission.error_message = Some(error_message.into());
         submission.updated_at = now;
         submission.completed_at = Some(now);
-        Ok(submission.clone())
+        let submission = submission.clone();
+        self.persist_inner(&inner)?;
+        Ok(submission)
     }
 
     pub fn get_submission(
@@ -2253,6 +2476,7 @@ impl InMemoryDatabase {
             created_at: now,
         };
         inner.score_events.push(event.clone());
+        self.persist_inner(&inner)?;
         Ok(event)
     }
 
@@ -2335,6 +2559,7 @@ impl InMemoryDatabase {
             team.updated_at = now;
         }
         inner.score_events.extend(pending_events.iter().cloned());
+        self.persist_inner(&inner)?;
         Ok(pending_events)
     }
 
@@ -2379,7 +2604,9 @@ impl InMemoryDatabase {
             };
         }
 
-        update_team_scores(&mut inner, scores)
+        let teams = update_team_scores(&mut inner, scores)?;
+        self.persist_inner(&inner)?;
+        Ok(teams)
     }
 
     pub fn recalculate_challenge_pass_awards(&self) -> Result<Vec<Team>, StoreError> {
@@ -2421,7 +2648,9 @@ impl InMemoryDatabase {
             scores.insert(event.team_id, event.score_after);
         }
 
-        update_team_scores(&mut inner, scores)
+        let teams = update_team_scores(&mut inner, scores)?;
+        self.persist_inner(&inner)?;
+        Ok(teams)
     }
 
     pub fn leaderboard(&self) -> Result<Vec<Team>, StoreError> {
@@ -2467,6 +2696,16 @@ impl InMemoryDatabase {
     fn write_inner(&self) -> Result<std::sync::RwLockWriteGuard<'_, StoreInner>, StoreError> {
         self.inner.write().map_err(|_| StoreError::LockUnavailable)
     }
+
+    fn persist_inner(&self, inner: &StoreInner) -> Result<(), StoreError> {
+        let Some(path) = self.persistence_path.as_ref() else {
+            return Ok(());
+        };
+        atomic_write_json(path, &PersistedStoreInner::from(inner)).map_err(|error| {
+            tracing::warn!(path = %path.display(), %error, "failed to persist database snapshot");
+            StoreError::LockUnavailable
+        })
+    }
 }
 
 impl Database for InMemoryDatabase {
@@ -2497,7 +2736,92 @@ struct StoreInner {
     next_queue_order: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize)]
+struct PersistedStoreInner {
+    teams: Vec<Team>,
+    challenge_sets: Vec<ChallengeSet>,
+    challenges: Vec<Challenge>,
+    submissions: Vec<Submission>,
+    score_events: Vec<ScoreEvent>,
+    last_submission_at: Vec<(TeamId, DateTime<Utc>)>,
+    next_queue_order: i64,
+}
+
+impl From<&StoreInner> for PersistedStoreInner {
+    fn from(inner: &StoreInner) -> Self {
+        Self {
+            teams: inner.teams.values().cloned().collect(),
+            challenge_sets: inner.challenge_sets.values().cloned().collect(),
+            challenges: inner.challenges.values().cloned().collect(),
+            submissions: inner.submissions.values().cloned().collect(),
+            score_events: inner.score_events.clone(),
+            last_submission_at: inner
+                .last_submission_at
+                .iter()
+                .map(|(team_id, submitted_at)| (*team_id, *submitted_at))
+                .collect(),
+            next_queue_order: inner.next_queue_order,
+        }
+    }
+}
+
+impl From<PersistedStoreInner> for StoreInner {
+    fn from(persisted: PersistedStoreInner) -> Self {
+        let teams: HashMap<_, _> = persisted
+            .teams
+            .into_iter()
+            .map(|team| (team.id, team))
+            .collect();
+        let login_codes = teams
+            .values()
+            .map(|team| (team.login_code.clone(), team.id))
+            .collect();
+        let challenge_sets = persisted
+            .challenge_sets
+            .into_iter()
+            .map(|challenge_set| (challenge_set.id, challenge_set))
+            .collect();
+        let challenges: HashMap<_, _> = persisted
+            .challenges
+            .into_iter()
+            .map(|challenge| (challenge.id, challenge))
+            .collect();
+        let challenge_slugs = challenges
+            .values()
+            .map(|challenge| {
+                (
+                    (challenge.challenge_set_id, challenge.slug.clone()),
+                    challenge.id,
+                )
+            })
+            .collect();
+        let submissions: HashMap<_, _> = persisted
+            .submissions
+            .into_iter()
+            .map(|submission| (submission.id, submission))
+            .collect();
+        let minimum_next_queue_order = submissions
+            .values()
+            .map(|submission| submission.queue_order)
+            .max()
+            .and_then(|queue_order| queue_order.checked_add(1))
+            .unwrap_or(0);
+
+        Self {
+            teams,
+            login_codes,
+            challenge_sets,
+            challenges,
+            challenge_slugs,
+            submissions,
+            score_events: persisted.score_events,
+            last_submission_at: persisted.last_submission_at.into_iter().collect(),
+            next_queue_order: persisted.next_queue_order.max(minimum_next_queue_order),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredAssetMetadata {
     pub id: String,
     pub content_type: String,
@@ -2505,7 +2829,7 @@ pub struct StoredAssetMetadata {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredAsset {
     pub metadata: StoredAssetMetadata,
     pub bytes: Vec<u8>,
@@ -2514,9 +2838,26 @@ pub struct StoredAsset {
 #[derive(Debug, Default, Clone)]
 pub struct InMemoryStorage {
     assets: Arc<RwLock<HashMap<String, StoredAsset>>>,
+    persistence_path: Option<Arc<PathBuf>>,
 }
 
 impl InMemoryStorage {
+    pub fn from_file(path: PathBuf) -> Self {
+        let assets = read_json::<PersistedStorage>(&path)
+            .map(|persisted| {
+                persisted
+                    .assets
+                    .into_iter()
+                    .map(|asset| (asset.metadata.id.clone(), asset))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            assets: Arc::new(RwLock::new(assets)),
+            persistence_path: Some(Arc::new(path)),
+        }
+    }
+
     pub fn put_asset(
         &self,
         id: impl Into<String>,
@@ -2540,6 +2881,7 @@ impl InMemoryStorage {
                 bytes,
             },
         );
+        self.persist_assets(&assets)?;
         Ok(metadata)
     }
 
@@ -2559,6 +2901,29 @@ impl InMemoryStorage {
             .map_err(|_| StoreError::LockUnavailable)?
             .get(id)
             .map(|asset| asset.metadata.clone()))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PersistedStorage {
+    assets: Vec<StoredAsset>,
+}
+
+impl InMemoryStorage {
+    fn persist_assets(
+        &self,
+        assets: &HashMap<String, StoredAsset>,
+    ) -> Result<(), StoreError> {
+        let Some(path) = self.persistence_path.as_ref() else {
+            return Ok(());
+        };
+        let persisted = PersistedStorage {
+            assets: assets.values().cloned().collect(),
+        };
+        atomic_write_json(path, &persisted).map_err(|error| {
+            tracing::warn!(path = %path.display(), %error, "failed to persist asset snapshot");
+            StoreError::LockUnavailable
+        })
     }
 }
 
@@ -2928,6 +3293,145 @@ mod tests {
             .expect("store should read")
             .expect("submission should exist");
         assert_eq!(cancelled.status, SubmissionStatus::Cancelled);
+    }
+
+    #[test]
+    fn repository_snapshot_persists_and_reloads_core_state() {
+        let path = temp_snapshot_path("store");
+        let store = InMemoryDatabase::from_file(path.clone());
+        let (team, challenge) = team_and_challenge(&store);
+        let submission = store
+            .create_submission(team.id, challenge.id, json!({ "blocks": [] }), None)
+            .expect("submission should create");
+        store
+            .mark_submission_completed(
+                submission.id,
+                CompletedSubmission {
+                    trace: Some(json!({ "steps": [] })),
+                    result_image_asset_id: Some("result-1".to_owned()),
+                    result_image_path: Some("results/result-1.png".to_owned()),
+                    result_image_url: None,
+                },
+            )
+            .expect("submission should complete");
+        store
+            .append_score_event(ScoreEventInput::challenge_pass(
+                team.id,
+                challenge.id,
+                submission.id,
+                challenge.points,
+            ))
+            .expect("score event should append");
+
+        let reloaded = InMemoryDatabase::from_file(path);
+        let reloaded_team = reloaded
+            .team_by_login_code("code")
+            .expect("store should read")
+            .expect("team should reload");
+        assert_eq!(reloaded_team.id, team.id);
+        assert_eq!(reloaded_team.total_score, challenge.points);
+
+        let reloaded_submission = reloaded
+            .get_submission(submission.id)
+            .expect("store should read")
+            .expect("submission should reload");
+        assert_eq!(reloaded_submission.status, SubmissionStatus::Completed);
+        assert_eq!(
+            reloaded_submission.result_image_asset_id.as_deref(),
+            Some("result-1")
+        );
+
+        let score_events = reloaded
+            .list_score_events(ScoreEventListFilter::default())
+            .expect("score events should reload");
+        assert_eq!(score_events.len(), 1);
+        assert_eq!(score_events[0].team_id, team.id);
+
+        let duplicate_slug = reloaded.create_challenge(NewChallenge {
+            challenge_set_id: challenge.challenge_set_id,
+            slug: challenge.slug.clone(),
+            title: "Duplicate".to_owned(),
+            description: String::new(),
+            target_image_asset_id: None,
+            target_image_path: None,
+            target_image_url: None,
+            points: 1,
+            enabled: true,
+            order: 2,
+            canvas: CanvasConfig::default(),
+            judge_config: json!({}),
+        });
+        assert_eq!(duplicate_slug, Err(StoreError::DuplicateChallengeSlug));
+
+        let next_submission = reloaded
+            .create_submission(team.id, challenge.id, json!({ "blocks": ["next"] }), None)
+            .expect("next submission should create");
+        assert!(next_submission.queue_order > submission.queue_order);
+    }
+
+    #[test]
+    fn game_snapshot_persists_and_reloads_round_state() {
+        let path = temp_snapshot_path("game");
+        let store = InMemoryDatabase::default();
+        let game = GameStore::from_file(path.clone());
+        let (team, challenge) = team_and_challenge(&store);
+        let submission = store
+            .create_submission(team.id, challenge.id, json!({}), None)
+            .expect("submission should create");
+
+        game.start_round(
+            &store,
+            StartRoundInput {
+                challenge_id: challenge.id,
+                submission_seconds: 60,
+                public_votes_per_team: 3,
+                created_by: Some("admin".to_owned()),
+            },
+        )
+        .expect("round should start");
+        game.attach_submission(&submission)
+            .expect("submission should attach");
+        game.set_phase(GamePhase::TeamSelection, Some("admin".to_owned()))
+            .expect("phase should update");
+        game.record_team_selection_vote(&store, team.id, "device-1".to_owned(), submission.id)
+            .expect("team vote should record");
+
+        let reloaded = GameStore::from_file(path);
+        let snapshot = reloaded
+            .snapshot(&store, Some(team.id))
+            .expect("game should reload");
+        assert_eq!(snapshot.state.phase, GamePhase::TeamSelection);
+        assert_eq!(snapshot.round_submissions.len(), 1);
+        assert_eq!(snapshot.round_submissions[0].id, submission.id);
+        assert_eq!(snapshot.nominations.len(), 1);
+        assert_eq!(snapshot.nominations[0].submission_id, submission.id);
+        assert!(snapshot.my_team_selection_vote.is_some());
+    }
+
+    #[test]
+    fn asset_snapshot_persists_and_reloads_bytes() {
+        let path = temp_snapshot_path("assets");
+        let storage = InMemoryStorage::from_file(path.clone());
+        storage
+            .put_asset("asset-1", "image/png", vec![1, 2, 3, 4])
+            .expect("asset should persist");
+
+        let reloaded = InMemoryStorage::from_file(path);
+        let asset = reloaded
+            .get_asset("asset-1")
+            .expect("asset store should read")
+            .expect("asset should reload");
+        assert_eq!(asset.metadata.id, "asset-1");
+        assert_eq!(asset.metadata.content_type, "image/png");
+        assert_eq!(asset.metadata.byte_len, 4);
+        assert_eq!(asset.bytes, vec![1, 2, 3, 4]);
+    }
+
+    fn temp_snapshot_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "turtle-game-{name}-{}.json",
+            uuid::Uuid::new_v4()
+        ))
     }
 
     fn team_and_challenge(store: &InMemoryDatabase) -> (Team, Challenge) {
