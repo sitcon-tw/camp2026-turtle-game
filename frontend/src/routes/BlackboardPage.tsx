@@ -9,6 +9,13 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import { adminApi, errorMessage } from "@/lib/admin/api"
+import {
+  parseBlackboardEventData,
+  playbackCueFromBlackboardEvent,
+  selectedSubmissionForSubmissionOpen,
+  submissionOpenCountItems,
+} from "@/lib/blackboard/submission-open"
+import type { BlackboardReplay, TeamSubmissionCount } from "@/lib/blackboard/submission-open"
 import type {
   BlackboardState,
   BlackboardTeam,
@@ -31,21 +38,9 @@ type TeamArtwork = {
   highlight?: boolean
 }
 
-type BlackboardReplay = {
-  submissionId: string
-  animationKey: string
-}
-
-type BlackboardEventPayload = {
-  type?: string
-  submission_id?: string
-  step_count?: number
-}
-
 export default function BlackboardPage() {
   const queryClient = useQueryClient()
-  const [replay, setReplay] = useState<BlackboardReplay | null>(null)
-  const replayResetTimer = useRef<number | null>(null)
+  const [playbackCue, setPlaybackCue] = useState<BlackboardReplay | null>(null)
   const blackboard = useQuery({
     queryKey: ["public", "blackboard"],
     queryFn: adminApi.blackboard,
@@ -55,21 +50,12 @@ export default function BlackboardPage() {
   useEffect(() => {
     const events = new EventSource("/api/v1/blackboard/events")
     events.addEventListener("message", (message) => {
-      const event = parseBlackboardEvent(message)
-      if (event?.type === "judging_started" && event.submission_id) {
-        const animationKey = `${event.submission_id}:${Date.now()}`
-        const replayMs = Math.max(4_000, (event.step_count ?? 0) * 500 + 1_500)
-        if (replayResetTimer.current !== null) window.clearTimeout(replayResetTimer.current)
-        setReplay({ submissionId: event.submission_id, animationKey })
-        replayResetTimer.current = window.setTimeout(() => {
-          setReplay((current) => current?.animationKey === animationKey ? null : current)
-        }, replayMs)
-      }
+      const playback = playbackCueFromBlackboardEvent(parseBlackboardEventData(message.data))
+      if (playback) setPlaybackCue(playback)
       void queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] })
     })
     return () => {
       events.close()
-      if (replayResetTimer.current !== null) window.clearTimeout(replayResetTimer.current)
     }
   }, [queryClient])
 
@@ -103,47 +89,107 @@ export default function BlackboardPage() {
 
   return (
     <main className="relative h-svh overflow-hidden bg-background p-3 lg:p-4">
-      <PhaseView data={blackboard.data} replay={replay} />
+      <PhaseView data={blackboard.data} playbackCue={playbackCue} />
       <TimerBlock snapshot={blackboard.data.game} />
     </main>
   )
 }
 
-function PhaseView({ data, replay }: { data: BlackboardState; replay: BlackboardReplay | null }) {
-  const replaySubmission = replay ? data.game.round_submissions.find((submission) => submission.id === replay.submissionId) ?? null : null
-  if (replay && replaySubmission) return <ReplaySpotlightView data={data} submission={replaySubmission} animationKey={replay.animationKey} />
-  if (data.game.state.phase === "submission_open") return <SubmissionOpenView data={data} />
+function PhaseView({ data, playbackCue }: { data: BlackboardState; playbackCue: BlackboardReplay | null }) {
+  if (data.game.state.phase === "submission_open") return <SubmissionOpenView data={data} playbackCue={playbackCue} />
   if (data.game.state.phase === "team_selection") return <TeamSelectionView data={data} />
   if (data.game.state.phase === "public_voting") return <PublicVotingView data={data} />
   if (data.game.state.phase === "round_complete" || data.game.state.phase === "scoring") return <RoundCompleteView data={data} />
   return <IdleView data={data} />
 }
 
-function SubmissionOpenView({ data }: { data: BlackboardState }) {
+function SubmissionOpenView({ data, playbackCue }: { data: BlackboardState; playbackCue: BlackboardReplay | null }) {
   const teams = useEnabledTeams(data)
-  const latestByTeam = useMemo(() => latestSubmissionsByTeam(data.game.round_submissions), [data.game.round_submissions])
-  const items = useMemo<TeamArtwork[]>(
-    () =>
-      teams.map((team) => {
-        const submission = latestByTeam.get(team.id) ?? null
-        return {
-          key: team.id,
-          team,
-          submission,
-          badge: submission ? `#${submission.attempt_no}` : "等待",
-          meta: submission ? formatSubmissionStatus(submission) : "尚未送出",
-        }
-      }),
-    [latestByTeam, teams],
+  const items = useMemo(
+    () => submissionOpenCountItems(teams, data.game.round_submissions),
+    [data.game.round_submissions, teams],
   )
+  const selectedPlayback = selectedSubmissionForSubmissionOpen(data, playbackCue)
+
+  if (selectedPlayback) {
+    return <ReplaySpotlightView data={data} submission={selectedPlayback.submission} animationKey={selectedPlayback.animationKey} />
+  }
 
   return (
     <BoardShell
-      title="最新作品"
+      title="各組作品數"
       subtitle={data.game.challenge ? `${data.game.challenge.title} / Submission Open` : "Submission Open"}
     >
-      <AdaptiveArtworkGrid items={items} challenge={data.game.challenge} mode="submission" />
+      <SubmissionCountGrid items={items} />
     </BoardShell>
+  )
+}
+
+function SubmissionCountGrid({ items }: { items: TeamSubmissionCount[] }) {
+  const viewportAspectRatio = useViewportAspectRatio()
+  const tracks = adaptiveGridTracks(items.length, 1.18, viewportAspectRatio)
+  const gridStyle = {
+    gridTemplateColumns: `repeat(${tracks.columns}, minmax(0, 1fr))`,
+    gridTemplateRows: `repeat(${tracks.rows}, minmax(0, 1fr))`,
+  }
+
+  if (items.length === 0) {
+    return (
+      <div className="flex h-full min-h-0 items-center justify-center rounded-[1rem] border-2 border-dashed border-border bg-surface-raised/70">
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>沒有啟用隊伍</EmptyTitle>
+            <EmptyDescription>啟用隊伍後送出數會出現在黑板上。</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid h-full min-h-0 gap-3" style={gridStyle}>
+      {items.map((item, index) => (
+        <SubmissionCountTile
+          key={item.team.id}
+          item={item}
+          style={{ animationDelay: `${index * 45}ms` }}
+        />
+      ))}
+    </div>
+  )
+}
+
+function SubmissionCountTile({
+  item,
+  style,
+}: {
+  item: TeamSubmissionCount
+  style?: CSSProperties
+}) {
+  const statusText = item.stats.failed > 0
+    ? `${item.stats.completed} 完成 / ${item.stats.failed} 失敗`
+    : `${item.stats.completed} 完成`
+
+  return (
+    <article
+      className="animate-in fade-in zoom-in-95 grid min-h-0 content-between overflow-hidden rounded-[1rem] border-2 border-ink bg-surface-raised p-3 duration-300 shadow-[3px_3px_0_rgba(23,35,58,0.12)] sm:p-4"
+      style={style}
+    >
+      <div className="min-w-0">
+        <div className="truncate text-xl font-black lg:text-3xl">{item.team.name}</div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Badge variant={item.stats.active > 0 ? "default" : "secondary"} className="font-black">
+            {item.stats.active > 0 ? `${item.stats.active} 執行中` : statusText}
+          </Badge>
+        </div>
+      </div>
+      <div className="min-w-0 py-1 text-center sm:py-3">
+        <div className="font-mono text-5xl font-black leading-none tabular-nums sm:text-6xl lg:text-8xl">{item.stats.total}</div>
+        <div className="mt-1 text-xs font-black uppercase tracking-[0.18em] text-muted-foreground sm:mt-2 sm:text-sm lg:text-base">
+          submissions
+        </div>
+      </div>
+    </article>
   )
 }
 
@@ -158,11 +204,12 @@ function ReplaySpotlightView({
 }) {
   const team = data.teams.find((item) => item.id === submission.team_id)
   const stepCount = traceStepCount(submission.trace)
+  const replayTitle = `${team?.name ?? `Team ${submission.team_id.slice(0, 6)}`} #${submission.attempt_no}`
 
   return (
     <BoardShell
-      title="現場重播"
-      subtitle={`${team?.name ?? "Team"} / #${submission.attempt_no} / ${data.game.challenge?.title ?? "Blackboard Replay"}`}
+      title={replayTitle}
+      subtitle={data.game.challenge?.title ?? "Submission Open"}
     >
       <div className="grid h-full min-h-0 gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.45fr)]">
         <section className="animate-in fade-in zoom-in-95 min-h-0 overflow-hidden rounded-[1rem] border-2 border-ink bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.22),transparent_36%),hsl(var(--surface-raised))] duration-500 shadow-[4px_4px_0_rgba(23,35,58,0.14)]">
@@ -735,23 +782,6 @@ function useVotingSwapAnimation(tileRefs: RefObject<Map<string, HTMLElement>>, e
   })
 }
 
-function latestSubmissionsByTeam(submissions: GameSubmission[]) {
-  const latest = new Map<string, GameSubmission>()
-  for (const submission of submissions) {
-    const current = latest.get(submission.team_id)
-    if (!current || compareSubmissionRecency(submission, current) > 0) latest.set(submission.team_id, submission)
-  }
-  return latest
-}
-
-function compareSubmissionRecency(left: GameSubmission, right: GameSubmission) {
-  return (
-    Date.parse(left.created_at) - Date.parse(right.created_at) ||
-    left.attempt_no - right.attempt_no ||
-    left.id.localeCompare(right.id)
-  )
-}
-
 function useViewportAspectRatio() {
   const [aspectRatio, setAspectRatio] = useState(() => readViewportAspectRatio())
 
@@ -835,14 +865,6 @@ function traceStepCount(trace: unknown) {
   if (!trace || typeof trace !== "object" || !("steps" in trace)) return null
   const steps = (trace as { steps?: unknown }).steps
   return Array.isArray(steps) ? steps.length : null
-}
-
-function parseBlackboardEvent(message: MessageEvent) {
-  try {
-    return JSON.parse(String(message.data)) as BlackboardEventPayload
-  } catch {
-    return null
-  }
 }
 
 function readVoteCount(label: string) {
