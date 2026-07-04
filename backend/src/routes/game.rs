@@ -152,6 +152,12 @@ async fn start_round(
             },
         )
         .map_err(game_error)?;
+    state.blackboard.set_selected_submission_id(None)?;
+    state
+        .event_bus
+        .publish(AppEvent::BlackboardPlaybackChanged {
+            submission_id: None,
+        });
     publish_game(&state, view.version);
     schedule_phase_auto_advance(&state, &view);
     let snapshot = state

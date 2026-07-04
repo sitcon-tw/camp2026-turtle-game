@@ -7,14 +7,15 @@ use axum::{
         Sse,
         sse::{Event, KeepAlive},
     },
-    routing::get,
+    routing::{delete, get},
 };
 use serde::Serialize;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
 use crate::{
+    auth::AdminUser,
     error::AppError,
-    models::TeamId,
+    models::{SubmissionId, TeamId},
     routes::game::GameStateResponse,
     routes::submissions::{LeaderboardEntry, leaderboard_entries},
     state::{AppEvent, AppState},
@@ -24,11 +25,16 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/blackboard/state", get(blackboard_state))
         .route("/blackboard/events", get(blackboard_events))
+        .route(
+            "/admin/blackboard/playback",
+            delete(clear_blackboard_playback),
+        )
 }
 
 #[derive(Debug, Serialize)]
 struct BlackboardState {
     status: BlackboardStatus,
+    selected_submission_id: Option<SubmissionId>,
     game: GameStateResponse,
     teams: Vec<BlackboardTeam>,
     leaderboard: Vec<LeaderboardEntry>,
@@ -63,17 +69,48 @@ async fn blackboard_state(
             total_score: team.total_score,
         })
         .collect();
-    let game = state
+    let game_snapshot = state
         .game
         .snapshot(state.repository.as_ref(), None)
-        .map_err(|error| AppError::internal(format!("game snapshot is unavailable: {error}")))?
-        .into();
+        .map_err(|error| AppError::internal(format!("game snapshot is unavailable: {error}")))?;
+    let selected_submission_id =
+        state
+            .blackboard
+            .selected_submission_id()?
+            .filter(|selected_submission_id| {
+                game_snapshot
+                    .round_submissions
+                    .iter()
+                    .any(|submission| submission.id == *selected_submission_id)
+            });
+    let game = game_snapshot.into();
 
     Ok(Json(BlackboardState {
         status: BlackboardStatus::Idle,
+        selected_submission_id,
         game,
         teams,
         leaderboard,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+struct BlackboardPlaybackSelection {
+    selected_submission_id: Option<SubmissionId>,
+}
+
+async fn clear_blackboard_playback(
+    AdminUser(_user): AdminUser,
+    State(state): State<AppState>,
+) -> Result<Json<BlackboardPlaybackSelection>, AppError> {
+    let selected_submission_id = state.blackboard.set_selected_submission_id(None)?;
+    state
+        .event_bus
+        .publish(AppEvent::BlackboardPlaybackChanged {
+            submission_id: None,
+        });
+    Ok(Json(BlackboardPlaybackSelection {
+        selected_submission_id,
     }))
 }
 

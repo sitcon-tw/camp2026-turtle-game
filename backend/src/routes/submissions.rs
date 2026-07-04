@@ -157,6 +157,14 @@ async fn play_submission_on_blackboard(
     Path(submission_id): Path<SubmissionId>,
 ) -> Result<Json<BlackboardPlaybackResponse>, AppError> {
     play_completed_submission_for_blackboard(&state, submission_id).await?;
+    state
+        .blackboard
+        .set_selected_submission_id(Some(submission_id))?;
+    state
+        .event_bus
+        .publish(AppEvent::BlackboardPlaybackChanged {
+            submission_id: Some(submission_id),
+        });
     Ok(Json(BlackboardPlaybackResponse {
         played: true,
         submission_id,
@@ -466,7 +474,7 @@ fn validated_program_value(value: Value) -> Result<Value, AppError> {
 
 fn event_visible_to_team(state: &AppState, team_id: TeamId, event: &AppEvent) -> bool {
     match event {
-        AppEvent::LeaderboardUpdated => false,
+        AppEvent::LeaderboardUpdated | AppEvent::BlackboardPlaybackChanged { .. } => false,
         AppEvent::ScoreRecorded { score_event } => score_event.team_id == team_id,
         AppEvent::SubmissionUpdated { submission_id } => state
             .repository

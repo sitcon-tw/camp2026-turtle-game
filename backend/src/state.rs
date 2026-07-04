@@ -29,6 +29,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub auth_secret: Arc<str>,
     pub event_bus: EventBus,
+    pub blackboard: BlackboardStore,
     pub judge_lock: Arc<Mutex<()>>,
     pub queue_paused: Arc<RwLock<bool>>,
     pub repository: Arc<dyn Repository>,
@@ -52,6 +53,7 @@ impl AppState {
             config,
             auth_secret,
             event_bus: EventBus::new(EVENT_BUS_CAPACITY),
+            blackboard: BlackboardStore::default(),
             judge_lock: Arc::new(Mutex::new(())),
             queue_paused: Arc::new(RwLock::new(false)),
             repository,
@@ -107,6 +109,9 @@ impl EventBus {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AppEvent {
     LeaderboardUpdated,
+    BlackboardPlaybackChanged {
+        submission_id: Option<SubmissionId>,
+    },
     ScoreRecorded {
         score_event: ScoreEvent,
     },
@@ -142,6 +147,32 @@ pub enum AppEvent {
         round_id: RoundId,
         version: i64,
     },
+}
+
+#[derive(Clone, Default)]
+pub struct BlackboardStore {
+    selected_submission_id: Arc<RwLock<Option<SubmissionId>>>,
+}
+
+impl BlackboardStore {
+    pub fn selected_submission_id(&self) -> Result<Option<SubmissionId>, StoreError> {
+        self.selected_submission_id
+            .read()
+            .map(|selected_submission_id| *selected_submission_id)
+            .map_err(|_| StoreError::LockUnavailable)
+    }
+
+    pub fn set_selected_submission_id(
+        &self,
+        submission_id: Option<SubmissionId>,
+    ) -> Result<Option<SubmissionId>, StoreError> {
+        let mut selected_submission_id = self
+            .selected_submission_id
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        *selected_submission_id = submission_id;
+        Ok(*selected_submission_id)
+    }
 }
 
 #[derive(Clone)]

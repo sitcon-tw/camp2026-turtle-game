@@ -137,6 +137,236 @@ async fn blackboard_events_stream_immediate_judge_steps() {
     );
 }
 
+#[tokio::test]
+async fn admin_playback_selection_is_single_replacement_and_clearable() {
+    let state = AppState::new(Config::default());
+    let team = state
+        .repository
+        .create_team("Team", "TEAM", None)
+        .expect("team should create");
+    let second_team = state
+        .repository
+        .create_team("Second Team", "TEAM2", None)
+        .expect("second team should create");
+    let team_token = issue_token(
+        team.id.as_uuid().to_string(),
+        Role::Team,
+        Duration::from_secs(60),
+        state.auth_secret.as_ref(),
+    )
+    .expect("token should issue");
+    let second_team_token = issue_token(
+        second_team.id.as_uuid().to_string(),
+        Role::Team,
+        Duration::from_secs(60),
+        state.auth_secret.as_ref(),
+    )
+    .expect("second team token should issue");
+    let admin_token = issue_token(
+        "admin",
+        Role::Admin,
+        Duration::from_secs(60),
+        state.auth_secret.as_ref(),
+    )
+    .expect("admin token should issue");
+    let challenge_set = state
+        .repository
+        .create_challenge_set("Main", "v1", ChallengeSetStatus::Active)
+        .expect("challenge set should create");
+    let challenge = state
+        .repository
+        .create_challenge(NewChallenge {
+            challenge_set_id: challenge_set.id,
+            slug: "timed-shape".to_owned(),
+            title: "Timed Shape".to_owned(),
+            description: "Timed Shape".to_owned(),
+            target_image_asset_id: None,
+            target_image_path: None,
+            target_image_url: None,
+            points: 10,
+            enabled: true,
+            order: 1,
+            canvas: CanvasConfig::default(),
+            judge_config: json!({}),
+        })
+        .expect("challenge should create");
+    let app = router(state.clone());
+
+    let start_response = app
+        .clone()
+        .oneshot(
+            json_request(
+                "POST",
+                "/api/v1/admin/game/rounds",
+                Some(&admin_token),
+                json!({
+                    "challenge_id": challenge.id,
+                    "submission_seconds": 120,
+                    "public_votes_per_team": 3
+                }),
+            )
+            .expect("request should build"),
+        )
+        .await
+        .expect("request should complete");
+    assert_eq!(start_response.status(), StatusCode::CREATED);
+
+    let submission_response = app
+        .clone()
+        .oneshot(
+            json_request(
+                "POST",
+                "/api/v1/game/rounds/current/submissions",
+                Some(&team_token),
+                json!({ "block_program": animated_program() }),
+            )
+            .expect("request should build"),
+        )
+        .await
+        .expect("request should complete");
+    assert_eq!(submission_response.status(), StatusCode::CREATED);
+    let submission_body = response_json(submission_response).await;
+    let submission_id = submission_body["submission"]["id"]
+        .as_str()
+        .expect("submission id should be present");
+    let second_submission_response = app
+        .clone()
+        .oneshot(
+            json_request(
+                "POST",
+                "/api/v1/game/rounds/current/submissions",
+                Some(&second_team_token),
+                json!({ "block_program": animated_program() }),
+            )
+            .expect("request should build"),
+        )
+        .await
+        .expect("request should complete");
+    assert_eq!(second_submission_response.status(), StatusCode::CREATED);
+    let second_submission_body = response_json(second_submission_response).await;
+    let second_submission_id = second_submission_body["submission"]["id"]
+        .as_str()
+        .expect("second submission id should be present");
+
+    let unselected_response = app
+        .clone()
+        .oneshot(get_request("/api/v1/blackboard/state", None).expect("request should build"))
+        .await
+        .expect("request should complete");
+    assert_eq!(unselected_response.status(), StatusCode::OK);
+    let unselected_body = response_json(unselected_response).await;
+    assert!(unselected_body["selected_submission_id"].is_null());
+
+    let events_response = app
+        .clone()
+        .oneshot(get_request("/api/v1/blackboard/events", None).expect("request should build"))
+        .await
+        .expect("request should complete");
+    assert_eq!(events_response.status(), StatusCode::OK);
+    let mut event_stream = events_response.into_body().into_data_stream();
+    let mut event_buffer = String::new();
+
+    let playback_response = app
+        .clone()
+        .oneshot(
+            json_request(
+                "POST",
+                &format!("/api/v1/admin/submissions/{submission_id}/blackboard-playback"),
+                Some(&admin_token),
+                json!({}),
+            )
+            .expect("request should build"),
+        )
+        .await
+        .expect("request should complete");
+    assert_eq!(playback_response.status(), StatusCode::OK);
+
+    loop {
+        let event = next_sse_json(&mut event_stream, &mut event_buffer).await;
+        if event["type"] == "blackboard_playback_changed" {
+            assert_eq!(event["submission_id"], submission_id);
+            break;
+        }
+    }
+
+    let selected_response = app
+        .clone()
+        .oneshot(get_request("/api/v1/blackboard/state", None).expect("request should build"))
+        .await
+        .expect("request should complete");
+    assert_eq!(selected_response.status(), StatusCode::OK);
+    let selected_body = response_json(selected_response).await;
+    assert_eq!(selected_body["selected_submission_id"], submission_id);
+
+    let replacement_response = app
+        .clone()
+        .oneshot(
+            json_request(
+                "POST",
+                &format!("/api/v1/admin/submissions/{second_submission_id}/blackboard-playback"),
+                Some(&admin_token),
+                json!({}),
+            )
+            .expect("request should build"),
+        )
+        .await
+        .expect("request should complete");
+    assert_eq!(replacement_response.status(), StatusCode::OK);
+
+    loop {
+        let event = next_sse_json(&mut event_stream, &mut event_buffer).await;
+        if event["type"] == "blackboard_playback_changed" {
+            assert_eq!(event["submission_id"], second_submission_id);
+            break;
+        }
+    }
+
+    let replaced_response = app
+        .clone()
+        .oneshot(get_request("/api/v1/blackboard/state", None).expect("request should build"))
+        .await
+        .expect("request should complete");
+    assert_eq!(replaced_response.status(), StatusCode::OK);
+    let replaced_body = response_json(replaced_response).await;
+    assert_eq!(
+        replaced_body["selected_submission_id"],
+        second_submission_id
+    );
+
+    let clear_response = app
+        .clone()
+        .oneshot(
+            json_request(
+                "DELETE",
+                "/api/v1/admin/blackboard/playback",
+                Some(&admin_token),
+                json!({}),
+            )
+            .expect("request should build"),
+        )
+        .await
+        .expect("request should complete");
+    assert_eq!(clear_response.status(), StatusCode::OK);
+    let clear_body = response_json(clear_response).await;
+    assert!(clear_body["selected_submission_id"].is_null());
+
+    loop {
+        let event = next_sse_json(&mut event_stream, &mut event_buffer).await;
+        if event["type"] == "blackboard_playback_changed" {
+            assert!(event["submission_id"].is_null());
+            break;
+        }
+    }
+
+    let cleared_response = app
+        .oneshot(get_request("/api/v1/blackboard/state", None).expect("request should build"))
+        .await
+        .expect("request should complete");
+    assert_eq!(cleared_response.status(), StatusCode::OK);
+    let cleared_body = response_json(cleared_response).await;
+    assert!(cleared_body["selected_submission_id"].is_null());
+}
+
 fn valid_program() -> Value {
     json!({
         "version": 1,
