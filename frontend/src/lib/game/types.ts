@@ -163,6 +163,7 @@ export type BlackboardTeam = {
 
 export type BlackboardState = {
   status: "idle"
+  selected_submission_id: string | null
   game: GameStateResponse
   teams: BlackboardTeam[]
   leaderboard: LeaderboardEntry[]

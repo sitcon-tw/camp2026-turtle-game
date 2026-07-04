@@ -198,6 +198,11 @@ export const adminApi = {
       { method: "POST", body: jsonBody({}) },
     )
   },
+  clearBlackboardPlayback() {
+    return request<{ selected_submission_id: string | null }>("/api/v1/admin/blackboard/playback", {
+      method: "DELETE",
+    })
+  },
   leaderboard() {
     return request<LeaderboardResponse>("/api/v1/leaderboard", { admin: false })
   },
