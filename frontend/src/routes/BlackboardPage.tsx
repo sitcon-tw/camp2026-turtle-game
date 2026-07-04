@@ -31,8 +31,21 @@ type TeamArtwork = {
   highlight?: boolean
 }
 
+type BlackboardReplay = {
+  submissionId: string
+  animationKey: string
+}
+
+type BlackboardEventPayload = {
+  type?: string
+  submission_id?: string
+  step_count?: number
+}
+
 export default function BlackboardPage() {
   const queryClient = useQueryClient()
+  const [replay, setReplay] = useState<BlackboardReplay | null>(null)
+  const replayResetTimer = useRef<number | null>(null)
   const blackboard = useQuery({
     queryKey: ["public", "blackboard"],
     queryFn: adminApi.blackboard,
@@ -41,10 +54,23 @@ export default function BlackboardPage() {
 
   useEffect(() => {
     const events = new EventSource("/api/v1/blackboard/events")
-    events.addEventListener("message", () => {
+    events.addEventListener("message", (message) => {
+      const event = parseBlackboardEvent(message)
+      if (event?.type === "judging_started" && event.submission_id) {
+        const animationKey = `${event.submission_id}:${Date.now()}`
+        const replayMs = Math.max(4_000, (event.step_count ?? 0) * 500 + 1_500)
+        if (replayResetTimer.current !== null) window.clearTimeout(replayResetTimer.current)
+        setReplay({ submissionId: event.submission_id, animationKey })
+        replayResetTimer.current = window.setTimeout(() => {
+          setReplay((current) => current?.animationKey === animationKey ? null : current)
+        }, replayMs)
+      }
       void queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] })
     })
-    return () => events.close()
+    return () => {
+      events.close()
+      if (replayResetTimer.current !== null) window.clearTimeout(replayResetTimer.current)
+    }
   }, [queryClient])
 
   if (blackboard.isLoading) {
@@ -77,13 +103,15 @@ export default function BlackboardPage() {
 
   return (
     <main className="relative h-svh overflow-hidden bg-background p-3 lg:p-4">
-      <PhaseView data={blackboard.data} />
+      <PhaseView data={blackboard.data} replay={replay} />
       <TimerBlock snapshot={blackboard.data.game} />
     </main>
   )
 }
 
-function PhaseView({ data }: { data: BlackboardState }) {
+function PhaseView({ data, replay }: { data: BlackboardState; replay: BlackboardReplay | null }) {
+  const replaySubmission = replay ? data.game.round_submissions.find((submission) => submission.id === replay.submissionId) ?? null : null
+  if (replay && replaySubmission) return <ReplaySpotlightView data={data} submission={replaySubmission} animationKey={replay.animationKey} />
   if (data.game.state.phase === "submission_open") return <SubmissionOpenView data={data} />
   if (data.game.state.phase === "team_selection") return <TeamSelectionView data={data} />
   if (data.game.state.phase === "public_voting") return <PublicVotingView data={data} />
@@ -116,6 +144,59 @@ function SubmissionOpenView({ data }: { data: BlackboardState }) {
     >
       <AdaptiveArtworkGrid items={items} challenge={data.game.challenge} mode="submission" />
     </BoardShell>
+  )
+}
+
+function ReplaySpotlightView({
+  data,
+  submission,
+  animationKey,
+}: {
+  data: BlackboardState
+  submission: GameSubmission
+  animationKey: string
+}) {
+  const team = data.teams.find((item) => item.id === submission.team_id)
+  const stepCount = traceStepCount(submission.trace)
+
+  return (
+    <BoardShell
+      title="現場重播"
+      subtitle={`${team?.name ?? "Team"} / #${submission.attempt_no} / ${data.game.challenge?.title ?? "Blackboard Replay"}`}
+    >
+      <div className="grid h-full min-h-0 gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.45fr)]">
+        <section className="animate-in fade-in zoom-in-95 min-h-0 overflow-hidden rounded-[1rem] border-2 border-ink bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.22),transparent_36%),hsl(var(--surface-raised))] duration-500 shadow-[4px_4px_0_rgba(23,35,58,0.14)]">
+          <SubmissionArtwork
+            submission={submission}
+            challenge={data.game.challenge}
+            aspectRatio={challengeAspectRatio(data.game.challenge)}
+            animated={submission.status === "completed"}
+            animationKey={animationKey}
+          />
+        </section>
+        <aside className="animate-in fade-in slide-in-from-right-4 grid min-h-0 content-between gap-3 rounded-[1rem] border-2 border-ink bg-card/95 p-4 duration-500 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
+          <div className="min-w-0">
+            <div className="text-sm font-black uppercase tracking-[0.22em] text-muted-foreground">Now playing</div>
+            <div className="mt-2 truncate text-4xl font-black lg:text-5xl">{team?.name ?? `Team ${submission.team_id.slice(0, 6)}`}</div>
+            <div className="mt-2 text-xl font-semibold text-muted-foreground">Attempt #{submission.attempt_no}</div>
+          </div>
+          <div className="grid gap-2">
+            <ReplayMetric label="Status" value={formatSubmissionStatus(submission)} />
+            <ReplayMetric label="Trace steps" value={stepCount ?? "-"} />
+            <ReplayMetric label="Submitted" value={formatClock(submission.created_at)} />
+          </div>
+        </aside>
+      </div>
+    </BoardShell>
+  )
+}
+
+function ReplayMetric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-[0.875rem] border border-border bg-background/80 px-3 py-3 shadow-[1px_1px_0_rgba(23,35,58,0.08)]">
+      <div className="text-xs font-black uppercase tracking-[0.18em] text-muted-foreground">{label}</div>
+      <div className="mt-1 truncate font-mono text-2xl font-black tabular-nums">{value}</div>
+    </div>
   )
 }
 
@@ -378,11 +459,13 @@ function SubmissionArtwork({
   challenge,
   aspectRatio,
   animated,
+  animationKey,
 }: {
   submission: GameSubmission | null
   challenge: GameChallenge | null
   aspectRatio: number
   animated: boolean
+  animationKey?: string | number
 }) {
   if (!submission) {
     return (
@@ -409,7 +492,7 @@ function SubmissionArtwork({
           trace={submission.trace}
           resultImageUrl={submission.result_image_url}
           animated={animated && submission.status === "completed"}
-          animationKey={submission.id}
+          animationKey={animationKey ?? submission.id}
           showTarget={false}
           showTurtle={animated}
           className="h-full w-full"
@@ -737,6 +820,20 @@ function formatSubmissionStatus(submission: GameSubmission) {
   if (submission.status === "running") return "執行中"
   if (submission.status === "queued") return "排隊中"
   return submission.status
+}
+
+function traceStepCount(trace: unknown) {
+  if (!trace || typeof trace !== "object" || !("steps" in trace)) return null
+  const steps = (trace as { steps?: unknown }).steps
+  return Array.isArray(steps) ? steps.length : null
+}
+
+function parseBlackboardEvent(message: MessageEvent) {
+  try {
+    return JSON.parse(String(message.data)) as BlackboardEventPayload
+  } catch {
+    return null
+  }
 }
 
 function readVoteCount(label: string) {

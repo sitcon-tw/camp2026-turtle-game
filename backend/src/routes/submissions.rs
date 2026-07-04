@@ -17,7 +17,7 @@ use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use uuid::Uuid;
 
 use crate::{
-    auth::AuthenticatedUser,
+    auth::{AdminUser, AuthenticatedUser},
     engine::{BlockProgram, EngineError, interpret_program, render_program_png},
     error::AppError,
     models::{
@@ -38,6 +38,10 @@ pub fn router() -> Router<AppState> {
             "/challenges/{challenge_id}/submissions",
             post(create_submission).get(list_my_challenge_submissions),
         )
+        .route(
+            "/admin/submissions/{submission_id}/blackboard-playback",
+            post(play_submission_on_blackboard),
+        )
         .route("/submissions/{submission_id}", get(get_my_submission))
         .route("/leaderboard", get(leaderboard))
         .route("/leaderboard/events", get(leaderboard_events))
@@ -54,6 +58,12 @@ struct SubmitRequest {
 #[derive(Debug, Serialize)]
 struct SubmissionCreatedResponse {
     submission: Submission,
+}
+
+#[derive(Debug, Serialize)]
+struct BlackboardPlaybackResponse {
+    played: bool,
+    submission_id: SubmissionId,
 }
 
 async fn create_submission(
@@ -139,6 +149,18 @@ async fn get_my_submission(
         return Err(AppError::forbidden("submission belongs to another team"));
     }
     Ok(Json(submission))
+}
+
+async fn play_submission_on_blackboard(
+    AdminUser(_user): AdminUser,
+    State(state): State<AppState>,
+    Path(submission_id): Path<SubmissionId>,
+) -> Result<Json<BlackboardPlaybackResponse>, AppError> {
+    play_completed_submission_for_blackboard(&state, submission_id).await?;
+    Ok(Json(BlackboardPlaybackResponse {
+        played: true,
+        submission_id,
+    }))
 }
 
 #[derive(Debug, Serialize)]
@@ -402,6 +424,31 @@ async fn play_trace_for_blackboard(
         team_id: submission.team_id,
         challenge_id: submission.challenge_id,
     });
+}
+
+async fn play_completed_submission_for_blackboard(
+    state: &AppState,
+    submission_id: SubmissionId,
+) -> Result<(), AppError> {
+    let submission = state
+        .repository
+        .get_submission(submission_id)?
+        .ok_or_else(|| AppError::not_found("submission was not found"))?;
+    let program: BlockProgram =
+        serde_json::from_value(submission.block_program.clone()).map_err(|error| {
+            AppError::internal(format!("stored submission program is invalid: {error}"))
+        })?;
+    let trace_value = submission
+        .trace
+        .clone()
+        .ok_or_else(|| AppError::bad_request("submission does not have a completed trace"))?;
+    let trace: crate::engine::ExecutionTrace =
+        serde_json::from_value(trace_value).map_err(|error| {
+            AppError::internal(format!("stored submission trace is invalid: {error}"))
+        })?;
+
+    play_trace_for_blackboard(state, &submission, &program, &trace).await;
+    Ok(())
 }
 
 fn validated_program_value(value: Value) -> Result<Value, AppError> {

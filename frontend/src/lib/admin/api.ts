@@ -192,6 +192,12 @@ export const adminApi = {
   scoreCurrentRound() {
     return request<GameStateResponse>("/api/v1/admin/game/score", { method: "POST", body: jsonBody({}) })
   },
+  playSubmissionOnBlackboard(submissionId: string) {
+    return request<{ played: boolean; submission_id: string }>(
+      `/api/v1/admin/submissions/${submissionId}/blackboard-playback`,
+      { method: "POST", body: jsonBody({}) },
+    )
+  },
   leaderboard() {
     return request<LeaderboardResponse>("/api/v1/leaderboard", { admin: false })
   },

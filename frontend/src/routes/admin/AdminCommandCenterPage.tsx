@@ -30,6 +30,7 @@ import { adminApi, errorMessage } from "@/lib/admin/api"
 import { getAdminToken } from "@/lib/admin/session"
 import type { Challenge, Team } from "@/lib/admin/types"
 import type { GamePhase, GameStateResponse, GameSubmission, LeaderboardEntry } from "@/lib/game/types"
+import { cn } from "@/lib/utils"
 
 type StartRoundForm = {
   challengeId: string
@@ -49,6 +50,7 @@ export default function AdminCommandCenterPage() {
   const [startForm, setStartForm] = useState<StartRoundForm>(defaultStartRoundForm)
   const [extendSeconds, setExtendSeconds] = useState("60")
   const [actionError, setActionError] = useState<string | null>(null)
+  const [selectedSubmissionId, setSelectedSubmissionId] = useState<string | null>(null)
 
   const game = useQuery({
     queryKey: ["game", "state", "admin"],
@@ -77,6 +79,10 @@ export default function AdminCommandCenterPage() {
   })
 
   const snapshot = game.data
+  const recentSubmissions = useMemo(
+    () => sortSubmissionsByRecency(snapshot?.round_submissions ?? []),
+    [snapshot?.round_submissions],
+  )
   const enabledChallenges = useMemo(
     () => (challenges.data ?? []).filter((challenge) => challenge.enabled).sort((left, right) => left.order - right.order),
     [challenges.data],
@@ -84,6 +90,16 @@ export default function AdminCommandCenterPage() {
   const allTeams = useMemo(() => teams.data ?? [], [teams.data])
   const teamNameById = useMemo(() => new Map(allTeams.map((team) => [team.id, team.name])), [allTeams])
   const leaderboardTeams = leaderboard.data?.teams ?? []
+
+  useEffect(() => {
+    if (recentSubmissions.length === 0) {
+      if (selectedSubmissionId !== null) setSelectedSubmissionId(null)
+      return
+    }
+    if (!selectedSubmissionId || !recentSubmissions.some((submission) => submission.id === selectedSubmissionId)) {
+      setSelectedSubmissionId(recentSubmissions[0].id)
+    }
+  }, [recentSubmissions, selectedSubmissionId])
 
   const startRound = useMutation({
     mutationFn: () =>
@@ -135,6 +151,12 @@ export default function AdminCommandCenterPage() {
         queryClient.invalidateQueries({ queryKey: ["leaderboard"] }),
       ])
     },
+    onError: (error) => setActionError(errorMessage(error)),
+  })
+
+  const playSubmission = useMutation({
+    mutationFn: (submissionId: string) => adminApi.playSubmissionOnBlackboard(submissionId),
+    onSuccess: () => setActionError(null),
     onError: (error) => setActionError(errorMessage(error)),
   })
 
@@ -220,6 +242,11 @@ export default function AdminCommandCenterPage() {
         teams={allTeams}
         leaderboard={leaderboardTeams}
         teamNameById={teamNameById}
+        selectedSubmissionId={selectedSubmissionId}
+        playingSubmissionId={playSubmission.variables ?? null}
+        isPlayingSubmission={playSubmission.isPending}
+        onSelectSubmission={setSelectedSubmissionId}
+        onPlaySubmission={(submissionId) => playSubmission.mutate(submissionId)}
         onRefresh={() => {
           void Promise.all([
             queryClient.invalidateQueries({ queryKey: ["game", "state", "admin"] }),
@@ -480,12 +507,22 @@ function LiveRoundMonitor({
   teams,
   leaderboard,
   teamNameById,
+  selectedSubmissionId,
+  playingSubmissionId,
+  isPlayingSubmission,
+  onSelectSubmission,
+  onPlaySubmission,
   onRefresh,
 }: {
   snapshot: GameStateResponse
   teams: Team[]
   leaderboard: LeaderboardEntry[]
   teamNameById: Map<string, string>
+  selectedSubmissionId: string | null
+  playingSubmissionId: string | null
+  isPlayingSubmission: boolean
+  onSelectSubmission: (submissionId: string) => void
+  onPlaySubmission: (submissionId: string) => void
   onRefresh: () => void
 }) {
   return (
@@ -512,7 +549,16 @@ function LiveRoundMonitor({
             <TabsTrigger value="leaderboard">Leaderboard</TabsTrigger>
           </TabsList>
           <TabsContent value="submissions" className="mt-4">
-            <SubmissionMatrix snapshot={snapshot} teams={teams} teamNameById={teamNameById} />
+            <SubmissionReplayDeck
+              snapshot={snapshot}
+              teams={teams}
+              teamNameById={teamNameById}
+              selectedSubmissionId={selectedSubmissionId}
+              playingSubmissionId={playingSubmissionId}
+              isPlayingSubmission={isPlayingSubmission}
+              onSelectSubmission={onSelectSubmission}
+              onPlaySubmission={onPlaySubmission}
+            />
           </TabsContent>
           <TabsContent value="nominations" className="mt-4">
             <NominationGrid snapshot={snapshot} teamNameById={teamNameById} />
@@ -532,27 +578,194 @@ function LiveRoundMonitor({
   )
 }
 
-function SubmissionMatrix({
+function SubmissionReplayDeck({
   snapshot,
   teams,
   teamNameById,
+  selectedSubmissionId,
+  playingSubmissionId,
+  isPlayingSubmission,
+  onSelectSubmission,
+  onPlaySubmission,
 }: {
   snapshot: GameStateResponse
   teams: Team[]
   teamNameById: Map<string, string>
+  selectedSubmissionId: string | null
+  playingSubmissionId: string | null
+  isPlayingSubmission: boolean
+  onSelectSubmission: (submissionId: string) => void
+  onPlaySubmission: (submissionId: string) => void
 }) {
-  const counts = countSubmissionsByTeam(snapshot.round_submissions)
+  const submissions = useMemo(() => sortSubmissionsByRecency(snapshot.round_submissions), [snapshot.round_submissions])
+  const selectedSubmission = submissions.find((submission) => submission.id === selectedSubmissionId) ?? submissions[0] ?? null
+  const completedCount = submissions.filter((submission) => submission.status === "completed").length
+  const activeTeamCount = new Set(submissions.map((submission) => submission.team_id)).size
+  const enabledTeamCount = teams.filter((team) => team.enabled).length
+
+  if (submissions.length === 0) {
+    return (
+      <EmptyPanel
+        title="No submissions yet"
+        description="As teams submit drawings, this becomes the live replay deck for the classroom blackboard."
+      />
+    )
+  }
+
+  const selectedCanPlay = Boolean(selectedSubmission?.trace && selectedSubmission.status === "completed")
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      {teams.filter((team) => team.enabled).map((team) => (
-        <div key={team.id} className="rounded-md border p-3">
-          <div className="truncate font-medium">{teamNameById.get(team.id) ?? team.name}</div>
-          <div className="mt-2 font-mono text-3xl font-semibold tabular-nums">{counts.get(team.id) ?? 0}</div>
-          <div className="text-sm text-muted-foreground">submitted drawings</div>
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.08fr)_minmax(22rem,0.92fr)]">
+      <section className="overflow-hidden rounded-[1.25rem] border-2 border-ink bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.18),transparent_34%),linear-gradient(135deg,hsl(var(--surface-raised)),hsl(var(--card)))] shadow-[4px_4px_0_rgba(23,35,58,0.14)]">
+        <div className="flex flex-col gap-3 border-b-2 border-ink bg-card/90 p-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="text-sm font-black uppercase tracking-[0.22em] text-muted-foreground">Blackboard Replay Deck</div>
+            <h2 className="mt-1 truncate text-2xl font-black">Pick the next crowd moment</h2>
+            <p className="mt-1 text-sm font-semibold text-muted-foreground">
+              Live feed from this round. New submissions appear here as the game state streams in.
+            </p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center sm:min-w-72">
+            <ReplayStat label="total" value={submissions.length} />
+            <ReplayStat label="ready" value={completedCount} />
+            <ReplayStat label="teams" value={`${activeTeamCount}/${enabledTeamCount}`} />
+          </div>
         </div>
-      ))}
+
+        <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_14rem]">
+          <div className="min-w-0">
+            {selectedSubmission ? (
+              <SubmissionPreview
+                submission={selectedSubmission}
+                challenge={snapshot.challenge}
+                title={`${teamNameById.get(selectedSubmission.team_id) ?? "Team"} #${selectedSubmission.attempt_no}`}
+                sourceLabel={submissionStatusLabel(selectedSubmission)}
+                className="h-[26rem]"
+                viewportClassName="h-[calc(100%-4.5rem)]"
+                animated={selectedCanPlay}
+                animationKey={`admin-selected:${selectedSubmission.id}`}
+                showTurtle={selectedCanPlay}
+              />
+            ) : null}
+          </div>
+          <aside className="grid content-between gap-3 rounded-[1rem] border-2 border-ink bg-background/80 p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]">
+            <div className="grid gap-3">
+              <div>
+                <div className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground">Selected</div>
+                <div className="mt-1 text-xl font-black">
+                  {selectedSubmission ? teamNameById.get(selectedSubmission.team_id) ?? selectedSubmission.team_id.slice(0, 8) : "None"}
+                </div>
+                <div className="mt-1 text-sm font-semibold text-muted-foreground">
+                  {selectedSubmission ? `Attempt #${selectedSubmission.attempt_no} / ${formatSubmissionTime(selectedSubmission.created_at)}` : "Choose a drawing"}
+                </div>
+              </div>
+              {selectedSubmission ? (
+                <div className="grid gap-2">
+                  <Badge variant={selectedCanPlay ? "secondary" : "outline"} className="w-fit font-black">
+                    {selectedCanPlay ? "Ready to play" : submissionStatusLabel(selectedSubmission)}
+                  </Badge>
+                  <div className="text-sm font-semibold text-muted-foreground">
+                    {selectedCanPlay
+                      ? "Sends this trace to the public blackboard spotlight."
+                      : "Replay unlocks after the judge finishes the trace."}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <Button
+              size="lg"
+              disabled={!selectedSubmission || !selectedCanPlay || isPlayingSubmission}
+              onClick={() => selectedSubmission ? onPlaySubmission(selectedSubmission.id) : undefined}
+            >
+              {isPlayingSubmission && playingSubmissionId === selectedSubmission?.id ? (
+                <Loader2Icon data-icon="inline-start" className="animate-spin" />
+              ) : (
+                <PlayIcon data-icon="inline-start" />
+              )}
+              Play on Blackboard
+            </Button>
+          </aside>
+        </div>
+      </section>
+
+      <section className="rounded-[1.25rem] border-2 border-ink bg-surface-raised p-3 shadow-[4px_4px_0_rgba(23,35,58,0.12)]">
+        <div className="mb-3 flex items-center justify-between gap-3 px-1">
+          <div>
+            <h3 className="font-black">Recent submissions</h3>
+            <p className="text-sm font-semibold text-muted-foreground">Newest first. Click any card to cue it.</p>
+          </div>
+          <Badge variant="outline" className="font-mono font-black">{submissions.length}</Badge>
+        </div>
+        <div className="grid max-h-[38rem] gap-3 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+          {submissions.map((submission) => (
+            <SubmissionReplayCard
+              key={submission.id}
+              submission={submission}
+              teamName={teamNameById.get(submission.team_id) ?? submission.team_id.slice(0, 8)}
+              selected={submission.id === selectedSubmission?.id}
+              onSelect={() => onSelectSubmission(submission.id)}
+            />
+          ))}
+        </div>
+      </section>
     </div>
+  )
+}
+
+function ReplayStat({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-[0.875rem] border border-border bg-background/75 px-2 py-2 shadow-[1px_1px_0_rgba(23,35,58,0.08)]">
+      <div className="text-[0.65rem] font-black uppercase tracking-[0.18em] text-muted-foreground">{label}</div>
+      <div className="font-mono text-xl font-black tabular-nums">{value}</div>
+    </div>
+  )
+}
+
+function SubmissionReplayCard({
+  submission,
+  teamName,
+  selected,
+  onSelect,
+}: {
+  submission: GameSubmission
+  teamName: string
+  selected: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "group grid gap-3 rounded-[1rem] border-2 p-3 text-left shadow-[2px_2px_0_rgba(23,35,58,0.1)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[4px_4px_0_rgba(23,35,58,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        selected ? "border-primary bg-primary/10" : "border-ink bg-card",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate font-black">{teamName}</div>
+          <div className="text-sm font-semibold text-muted-foreground">
+            Attempt #{submission.attempt_no} / {formatSubmissionTime(submission.created_at)}
+          </div>
+        </div>
+        <Badge variant={submission.status === "completed" ? "secondary" : "outline"} className="shrink-0 font-black">
+          {submissionStatusLabel(submission)}
+        </Badge>
+      </div>
+      <div className="aspect-[4/3] overflow-hidden rounded-[0.875rem] border-2 border-ink bg-background">
+        {submission.result_image_url ? (
+          <img
+            src={submission.result_image_url}
+            alt={`${teamName} attempt ${submission.attempt_no}`}
+            className="h-full w-full object-contain transition duration-200 group-hover:scale-[1.02]"
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center px-4 text-center text-sm font-semibold text-muted-foreground">
+            {submission.error_message ?? "Trace is being prepared"}
+          </div>
+        )}
+      </div>
+    </button>
   )
 }
 
@@ -630,22 +843,45 @@ function ResultGrid({ snapshot, teamNameById }: { snapshot: GameStateResponse; t
   )
 }
 
-function SubmissionPreview({ submission }: { submission?: GameSubmission }) {
+function SubmissionPreview({
+  submission,
+  challenge,
+  title,
+  sourceLabel,
+  className = "h-64",
+  viewportClassName = "h-[calc(100%-4.5rem)]",
+  animated = false,
+  animationKey,
+  showTurtle = false,
+}: {
+  submission?: GameSubmission
+  challenge?: GameStateResponse["challenge"]
+  title?: string
+  sourceLabel?: string
+  className?: string
+  viewportClassName?: string
+  animated?: boolean
+  animationKey?: string | number
+  showTurtle?: boolean
+}) {
   if (!submission) {
     return <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">Submission unavailable</div>
   }
 
   return (
     <TurtlePreviewPanel
+      challenge={challenge}
       program={submission.block_program}
       trace={submission.trace}
       resultImageUrl={submission.result_image_url}
-      title={`#${submission.id.slice(0, 8)}`}
-      sourceLabel={submission.status}
-      className="h-64"
-      viewportClassName="h-[calc(100%-4.5rem)]"
+      title={title ?? `#${submission.id.slice(0, 8)}`}
+      sourceLabel={sourceLabel ?? submission.status}
+      className={className}
+      viewportClassName={viewportClassName}
+      animated={animated}
+      animationKey={animationKey}
       showTarget={false}
-      showTurtle={false}
+      showTurtle={showTurtle}
     />
   )
 }
@@ -701,12 +937,6 @@ function extendedDeadlineIso(snapshot: GameStateResponse, seconds: number) {
   return new Date(Math.max(serverNow, currentDeadline) + seconds * 1_000).toISOString()
 }
 
-function countSubmissionsByTeam(submissions: GameSubmission[]) {
-  const counts = new Map<string, number>()
-  for (const submission of submissions) counts.set(submission.team_id, (counts.get(submission.team_id) ?? 0) + 1)
-  return counts
-}
-
 function nextPhase(phase: GamePhase): GamePhase | null {
   if (phase === "submission_open") return "team_selection"
   if (phase === "team_selection") return "public_voting"
@@ -739,5 +969,29 @@ function formatTimer(seconds: number | null) {
 }
 
 function formatClock(value: string) {
+  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value))
+}
+
+function sortSubmissionsByRecency(submissions: GameSubmission[]) {
+  return [...submissions].sort((left, right) => compareSubmissionRecency(right, left))
+}
+
+function compareSubmissionRecency(left: GameSubmission, right: GameSubmission) {
+  return (
+    Date.parse(left.created_at) - Date.parse(right.created_at) ||
+    left.attempt_no - right.attempt_no ||
+    left.id.localeCompare(right.id)
+  )
+}
+
+function submissionStatusLabel(submission: GameSubmission) {
+  if (submission.status === "completed") return "completed"
+  if (submission.status === "failed") return "failed"
+  if (submission.status === "running") return "running"
+  if (submission.status === "queued") return "queued"
+  return submission.status
+}
+
+function formatSubmissionTime(value: string) {
   return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value))
 }
