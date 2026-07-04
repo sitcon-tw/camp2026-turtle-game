@@ -60,14 +60,14 @@ export function TurtlePreviewPanel({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-md border bg-muted/20 text-xs",
+        "overflow-hidden rounded-[1rem] border-2 border-ink bg-surface-raised text-xs shadow-[2px_2px_0_rgba(23,35,58,0.1)]",
         compact ? "w-56" : "w-full",
         className,
       )}
     >
-      <div className="flex items-center justify-between gap-3 border-b bg-background/70 px-2 py-1">
-        <span className="font-medium">{title}</span>
-        <span className="truncate text-muted-foreground">{resolvedSourceLabel}</span>
+      <div className="flex items-center justify-between gap-3 border-b-2 border-ink bg-card/90 px-2 py-1">
+        <span className="font-black">{title}</span>
+        <span className="truncate font-semibold text-muted-foreground">{resolvedSourceLabel}</span>
       </div>
 
       <div className={cn("bg-background", compact ? "h-28" : "h-44", viewportClassName)}>
@@ -94,7 +94,7 @@ export function TurtlePreviewPanel({
         )}
       </div>
 
-      <div className="flex justify-between gap-3 border-t bg-background/70 px-2 py-1 text-muted-foreground">
+      <div className="flex justify-between gap-3 border-t-2 border-ink bg-card/90 px-2 py-1 font-semibold text-muted-foreground">
         <span>{footerStart ?? (preview.stepCount === null ? "steps -" : `${preview.stepCount} steps`)}</span>
         <span>{footerEnd ?? `${preview.lines.length} lines`}</span>
       </div>
