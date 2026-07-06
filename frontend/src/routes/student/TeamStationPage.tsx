@@ -8,6 +8,7 @@ import {
   ClockIcon,
   Loader2Icon,
   PlayIcon,
+  ScreenShareIcon,
   SendIcon,
   VoteIcon,
 } from "lucide-react"
@@ -19,6 +20,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useGameEvents } from "@/hooks/use-game-events"
+import { useTeamScreenStream } from "@/hooks/use-team-screen-stream"
 import { reactBlocklyToolboxCategories, registerTurtleBlocks, workspaceToBackendProgram } from "@/lib/blockly"
 import type { ChallengeCanvas } from "@/lib/blockly"
 import type { GameChallenge, GamePhase, GameStateResponse, GameSubmission, LeaderboardEntry, PublicVoteChoice } from "@/lib/game/types"
@@ -59,6 +61,7 @@ type PreviewGateState = {
 export default function TeamStationPage() {
   const queryClient = useQueryClient()
   const token = getTeamToken()
+  const screenStream = useTeamScreenStream(token)
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [localPreview, setLocalPreview] = useState<LocalPreviewState>({
     roundId: null,
@@ -245,6 +248,14 @@ export default function TeamStationPage() {
 
   return (
     <div className="mx-auto grid max-w-7xl gap-5 px-4 py-5 sm:px-6">
+      {screenStream.isBlocking ? (
+        <ScreenStreamGate
+          status={screenStream.status}
+          error={screenStream.error}
+          onRequestCapture={screenStream.requestCapture}
+        />
+      ) : null}
+
       <RoundHeader
         snapshot={snapshot}
         team={myTeam}
@@ -333,6 +344,54 @@ export default function TeamStationPage() {
       ) : null}
 
       {snapshot.state.phase === "idle" ? <IdlePanel /> : null}
+    </div>
+  )
+}
+
+function ScreenStreamGate({
+  status,
+  error,
+  onRequestCapture,
+}: {
+  status: string
+  error: string | null
+  onRequestCapture: () => void
+}) {
+  const isConnecting = status === "connecting"
+  const unsupported = status === "unsupported"
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/92 px-4 backdrop-blur-sm">
+      <Card className="w-full max-w-xl">
+        <CardHeader className="border-b">
+          <div className="flex items-start gap-3">
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-[0.875rem] border-2 border-ink bg-surface-raised shadow-[2px_2px_0_rgba(23,35,58,0.12)]">
+              <ScreenShareIcon className="size-5" />
+            </div>
+            <div>
+              <CardTitle>需要允許畫面直播</CardTitle>
+              <CardDescription>
+                進入遊戲前請選擇目前這個遊戲分頁或視窗。主持人只會在黑板播放被選中的 session。
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-4 pt-4">
+          {error ? <div className="rounded-[0.875rem] border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm font-semibold text-destructive">{error}</div> : null}
+          <Button
+            size="lg"
+            disabled={isConnecting || unsupported}
+            onClick={onRequestCapture}
+          >
+            {isConnecting ? (
+              <Loader2Icon data-icon="inline-start" className="animate-spin" />
+            ) : (
+              <ScreenShareIcon data-icon="inline-start" />
+            )}
+            {unsupported ? "瀏覽器不支援直播" : isConnecting ? "正在連線" : "允許直播並開始遊戲"}
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   )
 }

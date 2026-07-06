@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ClockIcon,
   Loader2Icon,
   PlayIcon,
   RefreshCwIcon,
+  ScreenShareIcon,
   StepForwardIcon,
   TrophyIcon,
+  WifiIcon,
+  WifiOffIcon,
   XIcon,
 } from "lucide-react"
 
@@ -30,7 +33,14 @@ import { useGameEvents } from "@/hooks/use-game-events"
 import { adminApi, errorMessage } from "@/lib/admin/api"
 import { getAdminToken } from "@/lib/admin/session"
 import type { Challenge, Team } from "@/lib/admin/types"
-import type { GamePhase, GameStateResponse, GameSubmission, LeaderboardEntry } from "@/lib/game/types"
+import type {
+  BlackboardDisplayMode,
+  BlackboardStreamSession,
+  GamePhase,
+  GameStateResponse,
+  GameSubmission,
+  LeaderboardEntry,
+} from "@/lib/game/types"
 import { cn } from "@/lib/utils"
 
 type StartRoundForm = {
@@ -76,6 +86,11 @@ export default function AdminCommandCenterPage() {
     queryKey: ["public", "blackboard"],
     queryFn: adminApi.blackboard,
     refetchInterval: 5_000,
+  })
+  const blackboardControl = useQuery({
+    queryKey: ["admin", "blackboard", "control"],
+    queryFn: adminApi.blackboardControl,
+    refetchInterval: 2_000,
   })
 
   const connectionState = useGameEvents({
@@ -150,7 +165,10 @@ export default function AdminCommandCenterPage() {
     mutationFn: (submissionId: string) => adminApi.playSubmissionOnBlackboard(submissionId),
     onSuccess: async () => {
       setActionError(null)
-      await queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin", "blackboard", "control"] }),
+      ])
     },
     onError: (error) => setActionError(errorMessage(error)),
   })
@@ -159,7 +177,22 @@ export default function AdminCommandCenterPage() {
     mutationFn: adminApi.clearBlackboardPlayback,
     onSuccess: async () => {
       setActionError(null)
-      await queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin", "blackboard", "control"] }),
+      ])
+    },
+    onError: (error) => setActionError(errorMessage(error)),
+  })
+
+  const setBlackboardDisplay = useMutation({
+    mutationFn: adminApi.setBlackboardDisplay,
+    onSuccess: async () => {
+      setActionError(null)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin", "blackboard", "control"] }),
+      ])
     },
     onError: (error) => setActionError(errorMessage(error)),
   })
@@ -241,13 +274,34 @@ export default function AdminCommandCenterPage() {
         </CardContent>
       </Card>
 
+      <BlackboardControlPanel
+        mode={blackboardControl.data?.display.mode ?? blackboard.data?.display.mode ?? "submission"}
+        selectedSubmissionId={blackboardControl.data?.display.selected_submission_id ?? blackboard.data?.selected_submission_id ?? null}
+        selectedStreamSessionId={blackboardControl.data?.display.selected_stream_session_id ?? blackboard.data?.display.selected_stream_session_id ?? null}
+        streamSessions={blackboardControl.data?.stream_sessions ?? blackboard.data?.stream_sessions ?? []}
+        teamNameById={teamNameById}
+        isPending={setBlackboardDisplay.isPending}
+        onMode={(mode) => {
+          if (mode === "submission") {
+            setBlackboardDisplay.mutate({ mode: "submission" })
+          }
+        }}
+        onSelectStream={(streamSessionId) => setBlackboardDisplay.mutate({ mode: "stream", stream_session_id: streamSessionId })}
+        onRefresh={() => {
+          void Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] }),
+            queryClient.invalidateQueries({ queryKey: ["admin", "blackboard", "control"] }),
+          ])
+        }}
+      />
+
       <LiveRoundMonitor
         snapshot={snapshot}
         teams={allTeams}
         leaderboard={leaderboardTeams}
         teamNameById={teamNameById}
         selectedSubmissionId={selectedSubmissionId}
-        blackboardSelectedSubmissionId={blackboard.data?.selected_submission_id ?? null}
+        blackboardSelectedSubmissionId={blackboardControl.data?.display.selected_submission_id ?? blackboard.data?.selected_submission_id ?? null}
         playingSubmissionId={playSubmission.variables ?? null}
         isPlayingSubmission={playSubmission.isPending}
         isClearingBlackboard={clearBlackboardPlayback.isPending}
@@ -260,6 +314,7 @@ export default function AdminCommandCenterPage() {
             queryClient.invalidateQueries({ queryKey: ["admin", "teams"] }),
             queryClient.invalidateQueries({ queryKey: ["leaderboard"] }),
             queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] }),
+            queryClient.invalidateQueries({ queryKey: ["admin", "blackboard", "control"] }),
           ])
         }}
       />
@@ -506,6 +561,245 @@ function PhaseTimeline({ phase }: { phase: GamePhase }) {
           </Badge>
         </div>
       ))}
+    </div>
+  )
+}
+
+function BlackboardControlPanel({
+  mode,
+  selectedSubmissionId,
+  selectedStreamSessionId,
+  streamSessions,
+  teamNameById,
+  isPending,
+  onMode,
+  onSelectStream,
+  onRefresh,
+}: {
+  mode: BlackboardDisplayMode
+  selectedSubmissionId: string | null
+  selectedStreamSessionId: string | null
+  streamSessions: BlackboardStreamSession[]
+  teamNameById: Map<string, string>
+  isPending: boolean
+  onMode: (mode: BlackboardDisplayMode) => void
+  onSelectStream: (streamSessionId: string) => void
+  onRefresh: () => void
+}) {
+  const [activeTab, setActiveTab] = useState<BlackboardDisplayMode>(mode)
+  const sessionsByTeam = useMemo(() => {
+    const grouped = new Map<string, BlackboardStreamSession[]>()
+    for (const session of streamSessions) {
+      const sessions = grouped.get(session.team_id) ?? []
+      sessions.push(session)
+      grouped.set(session.team_id, sessions)
+    }
+    return [...grouped.entries()].sort((left, right) => {
+      const leftName = teamNameById.get(left[0]) ?? left[0]
+      const rightName = teamNameById.get(right[0]) ?? right[0]
+      return leftName.localeCompare(rightName)
+    })
+  }, [streamSessions, teamNameById])
+
+  return (
+    <Card>
+      <CardHeader className="border-b">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle>Blackboard Controls</CardTitle>
+            <CardDescription>Switch between live session streaming and submission replay during Submission Open.</CardDescription>
+          </div>
+          <Button variant="outline" onClick={onRefresh}>
+            <RefreshCwIcon data-icon="inline-start" />
+            Refresh
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-4">
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => {
+            if (value === "submission" || value === "stream") {
+              setActiveTab(value)
+              if (value === "submission") onMode(value)
+            }
+          }}
+        >
+          <TabsList className="w-full flex-wrap justify-start">
+            <TabsTrigger value="stream">
+              <ScreenShareIcon data-icon="inline-start" />
+              Live Streams
+            </TabsTrigger>
+            <TabsTrigger value="submission">
+              <PlayIcon data-icon="inline-start" />
+              Submissions
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="stream" className="mt-4">
+            {sessionsByTeam.length === 0 ? (
+              <EmptyPanel title="No stream sessions" description="Team stations appear here after students allow screen streaming." />
+            ) : (
+              <Tabs defaultValue={sessionsByTeam[0]?.[0]} orientation="vertical" className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]">
+                <TabsList className="w-full">
+                  {sessionsByTeam.map(([teamId, sessions]) => (
+                    <TabsTrigger key={teamId} value={teamId} className="justify-start">
+                      {teamNameById.get(teamId) ?? teamId.slice(0, 8)}
+                      <Badge variant="outline" className="ml-auto">{sessions.length}</Badge>
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+                {sessionsByTeam.map(([teamId, sessions]) => (
+                  <TabsContent key={teamId} value={teamId}>
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {sessions.map((session) => (
+                        <StreamSessionCard
+                          key={session.session_id}
+                          session={session}
+                          teamName={teamNameById.get(session.team_id) ?? session.team_id.slice(0, 8)}
+                          selected={session.session_id === selectedStreamSessionId && mode === "stream"}
+                          isPending={isPending}
+                          onSelect={() => onSelectStream(session.session_id)}
+                        />
+                      ))}
+                    </div>
+                  </TabsContent>
+                ))}
+              </Tabs>
+            )}
+          </TabsContent>
+          <TabsContent value="submission" className="mt-4">
+            <div className="grid gap-3 rounded-[1rem] border-2 border-ink bg-surface-raised p-4 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="font-black">Submission replay mode</h3>
+                  <p className="text-sm font-semibold text-muted-foreground">
+                    Use the replay deck below to preview a completed submission and send it to the public board.
+                  </p>
+                </div>
+                <Badge variant={mode === "submission" ? "secondary" : "outline"} className="w-fit font-black">
+                  {mode === "submission" ? "Active" : "Not active"}
+                </Badge>
+              </div>
+              <div className="rounded-[0.875rem] border border-border bg-card/80 px-3 py-3">
+                <div className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground">Public board</div>
+                <div className="mt-1 font-black">
+                  {selectedSubmissionId ? `Submission #${selectedSubmissionId.slice(0, 8)}` : "Submission counts"}
+                </div>
+              </div>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </CardContent>
+    </Card>
+  )
+}
+
+function StreamSessionCard({
+  session,
+  teamName,
+  selected,
+  isPending,
+  onSelect,
+}: {
+  session: BlackboardStreamSession
+  teamName: string
+  selected: boolean
+  isPending: boolean
+  onSelect: () => void
+}) {
+  return (
+    <article
+      className={cn(
+        "grid gap-3 rounded-[1rem] border-2 bg-card p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]",
+        selected ? "border-primary" : "border-ink",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate font-black">{teamName}</div>
+          <div className="text-sm font-semibold text-muted-foreground">{session.label}</div>
+        </div>
+        <Badge variant={session.connected ? "secondary" : "outline"} className="font-black">
+          {session.connected ? <WifiIcon data-icon="inline-start" /> : <WifiOffIcon data-icon="inline-start" />}
+          {session.connected ? "Live" : "Offline"}
+        </Badge>
+      </div>
+      <StreamSessionThumbnail sessionId={session.session_id} alt={`${teamName} ${session.label}`} />
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <ReplayStat label="fps" value={session.desired_fps} />
+        <ReplayStat label="frame" value={session.latest_frame_seq} />
+        <ReplayStat label="seen" value={formatSubmissionTime(session.last_seen_at)} />
+      </div>
+      <Button disabled={isPending || !session.connected} onClick={onSelect}>
+        {isPending && selected ? <Loader2Icon data-icon="inline-start" className="animate-spin" /> : <ScreenShareIcon data-icon="inline-start" />}
+        {selected ? "On Blackboard" : "Stream on Blackboard"}
+      </Button>
+    </article>
+  )
+}
+
+function StreamSessionThumbnail({ sessionId, alt }: { sessionId: string; alt: string }) {
+  const [frame, setFrame] = useState<{ url: string | null; seq: number }>({ url: null, seq: 0 })
+  const seqRef = useRef(0)
+  const urlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    let timer = 0
+    seqRef.current = 0
+    if (urlRef.current) {
+      URL.revokeObjectURL(urlRef.current)
+      urlRef.current = null
+    }
+    const resetTimer = window.setTimeout(() => {
+      if (!cancelled) setFrame({ url: null, seq: 0 })
+    }, 0)
+
+    async function poll() {
+      const token = getAdminToken()
+      if (!token) return
+      try {
+        const response = await fetch(`/api/v1/admin/blackboard/stream-sessions/${sessionId}/frame?after=${seqRef.current}`, {
+          headers: { authorization: `Bearer ${token}` },
+        })
+        if (response.status === 200) {
+          const seq = Number(response.headers.get("x-frame-seq") ?? "0")
+          const blob = await response.blob()
+          if (!cancelled && seq > seqRef.current) {
+            const nextUrl = URL.createObjectURL(blob)
+            if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+            urlRef.current = nextUrl
+            seqRef.current = seq
+            setFrame({ url: nextUrl, seq })
+          }
+        }
+      } catch {
+        // Thumbnail polling is best effort.
+      }
+      if (!cancelled) timer = window.setTimeout(poll, 1_000)
+    }
+
+    void poll()
+    return () => {
+      cancelled = true
+      window.clearTimeout(resetTimer)
+      window.clearTimeout(timer)
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current)
+        urlRef.current = null
+      }
+    }
+  }, [sessionId])
+
+  return (
+    <div className="aspect-video overflow-hidden rounded-[0.875rem] border-2 border-ink bg-background">
+      {frame.url ? (
+        <img src={frame.url} alt={alt} className="h-full w-full object-contain" />
+      ) : (
+        <div className="flex h-full items-center justify-center px-4 text-center text-sm font-semibold text-muted-foreground">
+          Waiting for frame
+        </div>
+      )}
     </div>
   )
 }

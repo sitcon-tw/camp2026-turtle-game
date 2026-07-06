@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import type { CSSProperties, ReactNode, RefObject } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { ClockIcon, CrownIcon, TrophyIcon } from "lucide-react"
+import { ClockIcon, CrownIcon, ScreenShareIcon, TrophyIcon, WifiOffIcon } from "lucide-react"
 
 import { ChallengeRenderer } from "@/components/turtle"
 import { Badge } from "@/components/ui/badge"
@@ -24,6 +24,7 @@ import type {
   GameSubmission,
   LeaderboardEntry,
   RoundResultEntry,
+  BlackboardStreamSession,
 } from "@/lib/game/types"
 import { cn } from "@/lib/utils"
 
@@ -111,6 +112,13 @@ function SubmissionOpenView({ data, playbackCue }: { data: BlackboardState; play
   )
   const selectedPlayback = selectedSubmissionForSubmissionOpen(data, playbackCue)
 
+  if (data.display.mode === "stream") {
+    const session = data.display.selected_stream_session_id
+      ? data.stream_sessions.find((item) => item.session_id === data.display.selected_stream_session_id) ?? null
+      : null
+    return <StreamSpotlightView data={data} session={session} />
+  }
+
   if (selectedPlayback) {
     return <ReplaySpotlightView data={data} submission={selectedPlayback.submission} animationKey={selectedPlayback.animationKey} />
   }
@@ -123,6 +131,107 @@ function SubmissionOpenView({ data, playbackCue }: { data: BlackboardState; play
       <SubmissionCountGrid items={items} />
     </BoardShell>
   )
+}
+
+function StreamSpotlightView({
+  data,
+  session,
+}: {
+  data: BlackboardState
+  session: BlackboardStreamSession | null
+}) {
+  const streamFrame = useSelectedStreamFrame(data.display.selected_stream_session_id)
+  const team = session ? data.teams.find((item) => item.id === session.team_id) : null
+  const title = team ? `${team.name} / ${session?.label ?? "Live"}` : "Live Stream"
+
+  return (
+    <BoardShell
+      title={title}
+      subtitle={data.game.challenge ? `${data.game.challenge.title} / Live` : "Submission Open Live"}
+    >
+      <div className="grid h-full min-h-0 gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.45fr)]">
+        <section className="animate-in fade-in min-h-0 overflow-hidden rounded-[1rem] border-2 border-ink bg-background duration-300 shadow-[4px_4px_0_rgba(23,35,58,0.14)]">
+          {streamFrame.url ? (
+            <img
+              src={streamFrame.url}
+              alt={team ? `${team.name} live session` : "Live session"}
+              className="h-full w-full object-contain"
+            />
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
+              {session?.connected ? <ScreenShareIcon className="size-12" /> : <WifiOffIcon className="size-12" />}
+              <div className="text-2xl font-black text-foreground">{session ? "等待直播畫面" : "尚未選擇直播 session"}</div>
+              <div className="max-w-xl font-semibold">
+                {session?.connected ? "學生端正在連線，第一張畫面送達後會出現在這裡。" : "請在 Command Center 選擇一個已連線的 session。"}
+              </div>
+            </div>
+          )}
+        </section>
+        <aside className="animate-in fade-in slide-in-from-right-4 grid min-h-0 content-between gap-3 rounded-[1rem] border-2 border-ink bg-card/95 p-4 duration-500 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
+          <div className="min-w-0">
+            <div className="text-sm font-black uppercase tracking-[0.22em] text-muted-foreground">Now streaming</div>
+            <div className="mt-2 truncate text-4xl font-black lg:text-5xl">{team?.name ?? "No session"}</div>
+            <div className="mt-2 text-xl font-semibold text-muted-foreground">{session?.label ?? "Waiting for host selection"}</div>
+          </div>
+          <div className="grid gap-2">
+            <ReplayMetric label="Status" value={session?.connected ? "Live" : "Disconnected"} />
+            <ReplayMetric label="FPS target" value={session?.desired_fps ?? "-"} />
+            <ReplayMetric label="Frame" value={streamFrame.seq || session?.latest_frame_seq || "-"} />
+          </div>
+        </aside>
+      </div>
+    </BoardShell>
+  )
+}
+
+function useSelectedStreamFrame(selectedSessionId: string | null) {
+  const [frame, setFrame] = useState<{ url: string | null; seq: number }>({ url: null, seq: 0 })
+
+  useEffect(() => {
+    let cancelled = false
+    let currentUrl: string | null = null
+    let timeout = 0
+    let seq = 0
+
+    const resetTimer = window.setTimeout(() => {
+      setFrame((current) => {
+        if (current.url) URL.revokeObjectURL(current.url)
+        return { url: null, seq: 0 }
+      })
+    }, 0)
+
+    async function poll() {
+      if (cancelled || !selectedSessionId) return
+      try {
+        const response = await fetch(`/api/v1/blackboard/stream/frame?after=${seq}`)
+        if (response.status === 200) {
+          const nextSeq = Number(response.headers.get("x-frame-seq") ?? "0")
+          const blob = await response.blob()
+          if (!cancelled && nextSeq > seq) {
+            seq = nextSeq
+            const nextUrl = URL.createObjectURL(blob)
+            if (currentUrl) URL.revokeObjectURL(currentUrl)
+            currentUrl = nextUrl
+            setFrame({ url: nextUrl, seq })
+          }
+        }
+      } catch {
+        // Keep polling; the next request will recover when the stream resumes.
+      }
+      if (!cancelled) timeout = window.setTimeout(poll, 40)
+    }
+
+    void poll()
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(resetTimer)
+      window.clearTimeout(timeout)
+      if (currentUrl) URL.revokeObjectURL(currentUrl)
+    }
+  }, [selectedSessionId])
+
+  return frame
 }
 
 function SubmissionCountGrid({ items }: { items: TeamSubmissionCount[] }) {

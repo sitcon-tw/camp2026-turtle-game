@@ -130,6 +130,11 @@ function submission(input: {
 function blackboardState(roundSubmissions: GameSubmission[], selectedSubmissionId: string | null): BlackboardState {
   return {
     status: "idle",
+    display: {
+      mode: "submission",
+      selected_submission_id: selectedSubmissionId,
+      selected_stream_session_id: null,
+    },
     selected_submission_id: selectedSubmissionId,
     game: {
       state: {
@@ -156,6 +161,7 @@ function blackboardState(roundSubmissions: GameSubmission[], selectedSubmissionI
       results: [],
     },
     teams,
+    stream_sessions: [],
     leaderboard: [],
   }
 }

@@ -8,7 +8,14 @@ import type {
   ReadinessResponse,
   Team,
 } from "@/lib/admin/types"
-import type { BlackboardState, GamePhase, GameStateResponse, LeaderboardResponse } from "@/lib/game/types"
+import type {
+  BlackboardControlState,
+  BlackboardDisplayMode,
+  BlackboardState,
+  GamePhase,
+  GameStateResponse,
+  LeaderboardResponse,
+} from "@/lib/game/types"
 
 export class AdminApiError extends Error {
   code: string
@@ -201,6 +208,19 @@ export const adminApi = {
   clearBlackboardPlayback() {
     return request<{ selected_submission_id: string | null }>("/api/v1/admin/blackboard/playback", {
       method: "DELETE",
+    })
+  },
+  blackboardControl() {
+    return request<BlackboardControlState>("/api/v1/admin/blackboard/control")
+  },
+  setBlackboardDisplay(input: {
+    mode: BlackboardDisplayMode
+    submission_id?: string | null
+    stream_session_id?: string | null
+  }) {
+    return request<BlackboardControlState>("/api/v1/admin/blackboard/display", {
+      method: "POST",
+      body: jsonBody(input),
     })
   },
   leaderboard() {

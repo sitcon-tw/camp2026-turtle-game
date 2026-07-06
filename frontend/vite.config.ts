@@ -15,7 +15,10 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/api": apiProxyTarget,
+      "/api": {
+        target: apiProxyTarget,
+        ws: true,
+      },
       "/healthz": apiProxyTarget,
       "/readyz": apiProxyTarget,
     },

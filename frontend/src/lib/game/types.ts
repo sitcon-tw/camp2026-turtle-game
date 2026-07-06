@@ -163,8 +163,36 @@ export type BlackboardTeam = {
 
 export type BlackboardState = {
   status: "idle"
+  display: BlackboardDisplay
   selected_submission_id: string | null
   game: GameStateResponse
   teams: BlackboardTeam[]
+  stream_sessions: BlackboardStreamSession[]
   leaderboard: LeaderboardEntry[]
+}
+
+export type BlackboardDisplayMode = "submission" | "stream"
+
+export type BlackboardDisplay = {
+  mode: BlackboardDisplayMode
+  selected_submission_id: string | null
+  selected_stream_session_id: string | null
+}
+
+export type BlackboardStreamSession = {
+  session_id: string
+  team_id: string
+  device_id: string
+  label: string
+  connected: boolean
+  desired_fps: number
+  latest_frame_seq: number
+  last_seen_at: Timestamp
+  last_frame_at: Timestamp | null
+}
+
+export type BlackboardControlState = {
+  display: BlackboardDisplay
+  selected_submission_id: string | null
+  stream_sessions: BlackboardStreamSession[]
 }
