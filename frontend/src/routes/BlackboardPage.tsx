@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
+import { publicStreamViewerSocketUrl, useBlackboardStreamViewer } from "@/hooks/use-blackboard-stream-viewer"
 import { adminApi, errorMessage } from "@/lib/admin/api"
 import {
   parseBlackboardEventData,
@@ -140,12 +141,18 @@ function StreamSpotlightView({
   data: BlackboardState
   session: BlackboardStreamSession | null
 }) {
-  const streamFrame = useSelectedStreamFrame(data.display.selected_stream_session_id)
-  const streamMedia = useSelectedStreamMedia(session?.session_id ?? null)
+  const {
+    videoRef: streamVideoRef,
+    status: streamStatus,
+    fps: streamFps,
+    targetFps: streamTargetFps,
+  } = useBlackboardStreamViewer({
+    sessionId: session?.session_id ?? null,
+    url: session ? publicStreamViewerSocketUrl(session.session_id) : null,
+  })
   const team = session ? data.teams.find((item) => item.id === session.team_id) : null
   const title = team ? `${team.name} / ${session?.label ?? "Live"}` : "Live Stream"
-  const hasLiveVideo = streamMedia.status === "live"
-  const shouldShowFallback = !hasLiveVideo && streamFrame.url
+  const hasLiveVideo = streamStatus === "live"
 
   return (
     <BoardShell
@@ -156,15 +163,8 @@ function StreamSpotlightView({
         <section className="animate-in fade-in min-h-0 overflow-hidden rounded-[1rem] border-2 border-ink bg-background duration-300 shadow-[4px_4px_0_rgba(23,35,58,0.14)]">
           {session ? (
             <div className="relative h-full w-full">
-              {shouldShowFallback ? (
-                <img
-                  src={streamFrame.url ?? undefined}
-                  alt={team ? `${team.name} live session` : "Live session"}
-                  className="h-full w-full object-contain"
-                />
-              ) : null}
               <video
-                ref={streamMedia.videoRef}
+                ref={streamVideoRef}
                 autoPlay
                 muted
                 playsInline
@@ -173,17 +173,15 @@ function StreamSpotlightView({
                   hasLiveVideo ? "block" : "hidden",
                 )}
               />
-              {!hasLiveVideo && !streamFrame.url ? (
-                <StreamWaitingPanel session={session} />
-              ) : null}
-              {!hasLiveVideo && streamMedia.status === "connecting" && streamFrame.url ? (
+              {!hasLiveVideo ? <StreamWaitingPanel session={session} status={streamStatus} /> : null}
+              {!hasLiveVideo && streamStatus === "connecting" ? (
                 <div className="absolute bottom-3 left-3 rounded-full border border-border bg-card/90 px-3 py-1 text-sm font-black shadow-sm">
                   Connecting live video
                 </div>
               ) : null}
             </div>
           ) : (
-            <StreamWaitingPanel session={session} />
+            <StreamWaitingPanel session={session} status={streamStatus} />
           )}
         </section>
         <aside className="animate-in fade-in slide-in-from-right-4 grid min-h-0 content-between gap-3 rounded-[1rem] border-2 border-ink bg-card/95 p-4 duration-500 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
@@ -194,9 +192,8 @@ function StreamSpotlightView({
           </div>
           <div className="grid gap-2">
             <ReplayMetric label="Status" value={session?.connected ? "Live" : "Disconnected"} />
-            <ReplayMetric label="FPS target" value={session?.desired_fps ?? "-"} />
-            <ReplayMetric label="Video FPS" value={streamMedia.fps ? Math.round(streamMedia.fps) : "-"} />
-            <ReplayMetric label="Frame" value={streamFrame.seq || session?.latest_frame_seq || "-"} />
+            <ReplayMetric label="Target" value={streamTargetFps ? `${streamTargetFps} fps` : "60 fps best effort"} />
+            <ReplayMetric label="Video FPS" value={streamFps ? Math.round(streamFps) : "-"} />
           </div>
         </aside>
       </div>
@@ -204,223 +201,51 @@ function StreamSpotlightView({
   )
 }
 
-function StreamWaitingPanel({ session }: { session: BlackboardStreamSession | null }) {
+function StreamWaitingPanel({
+  session,
+  status,
+}: {
+  session: BlackboardStreamSession | null
+  status: string
+}) {
+  const message = streamWaitingMessage(session, status)
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
       {session?.connected ? <ScreenShareIcon className="size-12" /> : <WifiOffIcon className="size-12" />}
-      <div className="text-2xl font-black text-foreground">{session ? "等待直播畫面" : "尚未選擇直播 session"}</div>
-      <div className="max-w-xl font-semibold">
-        {session?.connected ? "學生端正在連線，第一張畫面送達後會出現在這裡。" : "請在 Command Center 選擇一個已連線的 session。"}
-      </div>
+      <div className="text-2xl font-black text-foreground">{message.title}</div>
+      <div className="max-w-xl font-semibold">{message.description}</div>
     </div>
   )
 }
 
-type StreamMediaStatus = "idle" | "connecting" | "live" | "error" | "unsupported"
-
-function useSelectedStreamMedia(selectedSessionId: string | null) {
-  const videoRef = useRef<HTMLVideoElement | null>(null)
-  const [status, setStatus] = useState<StreamMediaStatus>("idle")
-  const [fps, setFps] = useState(0)
-
-  useEffect(() => {
-    if (!selectedSessionId) {
-      setStatus("idle")
-      setFps(0)
-      return
+function streamWaitingMessage(session: BlackboardStreamSession | null, status: string) {
+  if (!session) {
+    return {
+      title: "尚未選擇直播 session",
+      description: "請在 Command Center 選擇一個已連線的 session。",
     }
-    if (typeof WebSocket === "undefined" || typeof RTCPeerConnection === "undefined") {
-      setStatus("unsupported")
-      setFps(0)
-      return
+  }
+  if (!session.connected) {
+    return {
+      title: "直播已離線",
+      description: "學生端直播連線中斷，重新連線後會自動恢復。",
     }
-
-    let cancelled = false
-    let peerConnection: RTCPeerConnection | null = null
-    let socket: WebSocket | null = null
-    let frameCallbackId = 0
-    setStatus("connecting")
-    setFps(0)
-
-    function ensurePeerConnection() {
-      if (peerConnection) return peerConnection
-      const nextPeerConnection = new RTCPeerConnection({ iceServers: rtcIceServers() })
-      peerConnection = nextPeerConnection
-      nextPeerConnection.addEventListener("icecandidate", (event) => {
-        if (!event.candidate || socket?.readyState !== WebSocket.OPEN) return
-        socket.send(JSON.stringify({
-          type: "webrtc_ice_candidate",
-          candidate: event.candidate.toJSON(),
-        }))
-      })
-      nextPeerConnection.addEventListener("connectionstatechange", () => {
-        if (!peerConnection) return
-        if (peerConnection.connectionState === "connected") setStatus("live")
-        if (peerConnection.connectionState === "failed") setStatus("error")
-      })
-      nextPeerConnection.addEventListener("track", (event) => {
-        const [stream] = event.streams
-        const video = videoRef.current
-        if (!video || !stream) return
-        video.srcObject = stream
-        void video.play().catch(() => undefined)
-        setStatus("live")
-        startFpsMonitor(video)
-      })
-      return nextPeerConnection
+  }
+  if (status === "unsupported") {
+    return {
+      title: "瀏覽器不支援直播",
+      description: "請使用支援 WebRTC 的瀏覽器開啟黑板。",
     }
-
-    function startFpsMonitor(video: HTMLVideoElement) {
-      if (!("requestVideoFrameCallback" in video)) return
-      let frames = 0
-      let lastSampleAt = performance.now()
-      const onFrame: VideoFrameRequestCallback = (now) => {
-        if (cancelled) return
-        frames += 1
-        if (now - lastSampleAt >= 1_000) {
-          setFps((frames * 1_000) / (now - lastSampleAt))
-          frames = 0
-          lastSampleAt = now
-        }
-        frameCallbackId = video.requestVideoFrameCallback(onFrame)
-      }
-      frameCallbackId = video.requestVideoFrameCallback(onFrame)
+  }
+  if (status === "error") {
+    return {
+      title: "直播連線失敗",
+      description: "請確認學生端仍在分享整個螢幕，或重新選擇直播 session。",
     }
-
-    async function handleMessage(event: MessageEvent) {
-      try {
-        const payload = JSON.parse(String(event.data)) as ViewerSignalPayload
-        if (payload.type === "webrtc_stream_closed") {
-          setStatus("error")
-          closePeerConnection()
-          return
-        }
-        if (payload.type === "webrtc_offer" && payload.sdp) {
-          const connection = ensurePeerConnection()
-          await connection.setRemoteDescription({ type: "offer", sdp: payload.sdp })
-          const answer = await connection.createAnswer()
-          await connection.setLocalDescription(answer)
-          if (socket?.readyState === WebSocket.OPEN && connection.localDescription) {
-            socket.send(JSON.stringify({
-              type: "webrtc_answer",
-              sdp: connection.localDescription.sdp,
-            }))
-          }
-        }
-        if (payload.type === "webrtc_ice_candidate" && payload.candidate) {
-          await ensurePeerConnection().addIceCandidate(payload.candidate)
-        }
-      } catch {
-        setStatus("error")
-      }
-    }
-
-    function closePeerConnection() {
-      if (frameCallbackId && videoRef.current && "cancelVideoFrameCallback" in videoRef.current) {
-        videoRef.current.cancelVideoFrameCallback(frameCallbackId)
-      }
-      if (videoRef.current) videoRef.current.srcObject = null
-      peerConnection?.close()
-      peerConnection = null
-      setFps(0)
-    }
-
-    socket = new WebSocket(streamViewerSocketUrl(selectedSessionId))
-    socket.addEventListener("message", (event) => {
-      void handleMessage(event)
-    })
-    socket.addEventListener("close", () => {
-      if (!cancelled) setStatus("error")
-      closePeerConnection()
-    })
-    socket.addEventListener("error", () => {
-      setStatus("error")
-    })
-
-    return () => {
-      cancelled = true
-      socket?.close()
-      closePeerConnection()
-    }
-  }, [selectedSessionId])
-
-  return { videoRef, status, fps }
-}
-
-type ViewerSignalPayload = {
-  type?: string
-  sdp?: string
-  candidate?: RTCIceCandidateInit
-}
-
-function useSelectedStreamFrame(selectedSessionId: string | null) {
-  const [frame, setFrame] = useState<{ url: string | null; seq: number }>({ url: null, seq: 0 })
-
-  useEffect(() => {
-    let cancelled = false
-    let currentUrl: string | null = null
-    let timeout = 0
-    let seq = 0
-
-    const resetTimer = window.setTimeout(() => {
-      setFrame((current) => {
-        if (current.url) URL.revokeObjectURL(current.url)
-        return { url: null, seq: 0 }
-      })
-    }, 0)
-
-    async function poll() {
-      if (cancelled || !selectedSessionId) return
-      try {
-        const response = await fetch(`/api/v1/blackboard/stream/frame?after=${seq}`)
-        if (response.status === 200) {
-          const nextSeq = Number(response.headers.get("x-frame-seq") ?? "0")
-          const blob = await response.blob()
-          if (!cancelled && nextSeq > seq) {
-            seq = nextSeq
-            const nextUrl = URL.createObjectURL(blob)
-            if (currentUrl) URL.revokeObjectURL(currentUrl)
-            currentUrl = nextUrl
-            setFrame({ url: nextUrl, seq })
-          }
-        }
-      } catch {
-        // Keep polling; the next request will recover when the stream resumes.
-      }
-      if (!cancelled) timeout = window.setTimeout(poll, 40)
-    }
-
-    void poll()
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(resetTimer)
-      window.clearTimeout(timeout)
-      if (currentUrl) URL.revokeObjectURL(currentUrl)
-    }
-  }, [selectedSessionId])
-
-  return frame
-}
-
-function streamViewerSocketUrl(sessionId: string) {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-  const params = new URLSearchParams({ session_id: sessionId })
-  return `${protocol}//${window.location.host}/api/v1/blackboard/stream/viewer?${params}`
-}
-
-function rtcIceServers(): RTCIceServer[] {
-  const raw = import.meta.env.VITE_WEBRTC_ICE_SERVERS
-  if (!raw) return []
-  try {
-    const parsed = JSON.parse(raw) as RTCIceServer[]
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return raw
-      .split(",")
-      .map((url: string) => url.trim())
-      .filter(Boolean)
-      .map((urls: string) => ({ urls }))
+  }
+  return {
+    title: "等待直播畫面",
+    description: "學生端正在連線，WebRTC 直播建立後會出現在這裡。",
   }
 }
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import type { RefObject } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ClockIcon,
@@ -29,6 +30,7 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { adminPreviewViewerSocketUrl, useBlackboardStreamViewer } from "@/hooks/use-blackboard-stream-viewer"
 import { useGameEvents } from "@/hooks/use-game-events"
 import { adminApi, errorMessage } from "@/lib/admin/api"
 import { getAdminToken } from "@/lib/admin/session"
@@ -604,6 +606,7 @@ function BlackboardControlPanel({
   onRefresh: () => void
 }) {
   const [activeTab, setActiveTab] = useState<BlackboardDisplayMode>(mode)
+  const [activeStreamTeamId, setActiveStreamTeamId] = useState<string | null>(null)
   const blackboardSubmission = blackboardSelectedSubmissionId
     ? snapshot.round_submissions.find((submission) => submission.id === blackboardSelectedSubmissionId) ?? null
     : null
@@ -630,6 +633,10 @@ function BlackboardControlPanel({
       return leftName.localeCompare(rightName)
     })
   }, [streamSessions, teamNameById])
+  const firstStreamTeamId = sessionsByTeam[0]?.[0] ?? null
+  const selectedStreamTeamId = sessionsByTeam.some(([teamId]) => teamId === activeStreamTeamId)
+    ? activeStreamTeamId
+    : firstStreamTeamId
 
   return (
     <Card>
@@ -680,7 +687,12 @@ function BlackboardControlPanel({
             {sessionsByTeam.length === 0 ? (
               <EmptyPanel title="No stream sessions" description="Team stations appear here after students allow screen streaming." />
             ) : (
-              <Tabs defaultValue={sessionsByTeam[0]?.[0]} orientation="vertical" className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]">
+              <Tabs
+                value={selectedStreamTeamId ?? undefined}
+                onValueChange={setActiveStreamTeamId}
+                orientation="vertical"
+                className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]"
+              >
                 <TabsList className="w-full">
                   {sessionsByTeam.map(([teamId, sessions]) => (
                     <TabsTrigger key={teamId} value={teamId} className="justify-start">
@@ -698,6 +710,7 @@ function BlackboardControlPanel({
                           session={session}
                           teamName={teamNameById.get(session.team_id) ?? session.team_id.slice(0, 8)}
                           selected={session.session_id === selectedStreamSessionId && mode === "stream"}
+                          previewEnabled={activeTab === "stream" && selectedStreamTeamId === teamId}
                           isPending={isPending}
                           onSelect={() => onSelectStream(session.session_id)}
                         />
@@ -734,15 +747,26 @@ function StreamSessionCard({
   session,
   teamName,
   selected,
+  previewEnabled,
   isPending,
   onSelect,
 }: {
   session: BlackboardStreamSession
   teamName: string
   selected: boolean
+  previewEnabled: boolean
   isPending: boolean
   onSelect: () => void
 }) {
+  const {
+    containerRef: previewContainerRef,
+    videoRef: previewVideoRef,
+    isVisible: previewVisible,
+    status: previewStatus,
+    fps: previewFps,
+    targetFps: previewTargetFps,
+  } = useAdminPreviewStream(session.session_id, previewEnabled && session.connected)
+  const isPreviewLive = previewStatus === "live"
   return (
     <article
       className={cn(
@@ -760,10 +784,16 @@ function StreamSessionCard({
           {session.connected ? "Live" : "Offline"}
         </Badge>
       </div>
-      <StreamSessionThumbnail sessionId={session.session_id} alt={`${teamName} ${session.label}`} />
+      <StreamSessionThumbnail
+        containerRef={previewContainerRef}
+        videoRef={previewVideoRef}
+        alt={`${teamName} ${session.label}`}
+        isLive={isPreviewLive}
+        statusLabel={thumbnailStatusLabel(previewEnabled && session.connected, previewVisible, previewStatus)}
+      />
       <div className="grid grid-cols-3 gap-2 text-center">
-        <ReplayStat label="fps" value={session.desired_fps} />
-        <ReplayStat label="frame" value={session.latest_frame_seq} />
+        <ReplayStat label="target" value={previewTargetFps ? `${previewTargetFps} fps` : "2 fps"} />
+        <ReplayStat label="video" value={previewFps ? Math.round(previewFps) : "-"} />
         <ReplayStat label="seen" value={formatSubmissionTime(session.last_seen_at)} />
       </div>
       <Button disabled={isPending || !session.connected} onClick={onSelect}>
@@ -774,70 +804,82 @@ function StreamSessionCard({
   )
 }
 
-function StreamSessionThumbnail({ sessionId, alt }: { sessionId: string; alt: string }) {
-  const [frame, setFrame] = useState<{ url: string | null; seq: number }>({ url: null, seq: 0 })
-  const seqRef = useRef(0)
-  const urlRef = useRef<string | null>(null)
+function useAdminPreviewStream(sessionId: string, enabled: boolean) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const isVisible = useElementVisible(containerRef)
+  const token = getAdminToken()
+  const hello = useMemo(() => token ? { type: "hello", token } : null, [token])
+  const streamMedia = useBlackboardStreamViewer({
+    sessionId,
+    enabled: enabled && isVisible && Boolean(token),
+    url: adminPreviewViewerSocketUrl(sessionId),
+    hello,
+  })
 
-  useEffect(() => {
-    let cancelled = false
-    let timer = 0
-    seqRef.current = 0
-    if (urlRef.current) {
-      URL.revokeObjectURL(urlRef.current)
-      urlRef.current = null
-    }
-    const resetTimer = window.setTimeout(() => {
-      if (!cancelled) setFrame({ url: null, seq: 0 })
-    }, 0)
+  return {
+    containerRef,
+    isVisible,
+    ...streamMedia,
+  }
+}
 
-    async function poll() {
-      const token = getAdminToken()
-      if (!token) return
-      try {
-        const response = await fetch(`/api/v1/admin/blackboard/stream-sessions/${sessionId}/frame?after=${seqRef.current}`, {
-          headers: { authorization: `Bearer ${token}` },
-        })
-        if (response.status === 200) {
-          const seq = Number(response.headers.get("x-frame-seq") ?? "0")
-          const blob = await response.blob()
-          if (!cancelled && seq > seqRef.current) {
-            const nextUrl = URL.createObjectURL(blob)
-            if (urlRef.current) URL.revokeObjectURL(urlRef.current)
-            urlRef.current = nextUrl
-            seqRef.current = seq
-            setFrame({ url: nextUrl, seq })
-          }
-        }
-      } catch {
-        // Thumbnail polling is best effort.
-      }
-      if (!cancelled) timer = window.setTimeout(poll, 1_000)
-    }
-
-    void poll()
-    return () => {
-      cancelled = true
-      window.clearTimeout(resetTimer)
-      window.clearTimeout(timer)
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current)
-        urlRef.current = null
-      }
-    }
-  }, [sessionId])
-
+function StreamSessionThumbnail({
+  containerRef,
+  videoRef,
+  alt,
+  isLive,
+  statusLabel,
+}: {
+  containerRef: RefObject<HTMLDivElement | null>
+  videoRef: RefObject<HTMLVideoElement | null>
+  alt: string
+  isLive: boolean
+  statusLabel: string
+}) {
   return (
-    <div className="aspect-video overflow-hidden rounded-[0.875rem] border-2 border-ink bg-background">
-      {frame.url ? (
-        <img src={frame.url} alt={alt} className="h-full w-full object-contain" />
-      ) : (
+    <div ref={containerRef} className="aspect-video overflow-hidden rounded-[0.875rem] border-2 border-ink bg-background">
+      <video
+        ref={videoRef}
+        aria-label={alt}
+        autoPlay
+        muted
+        playsInline
+        className={cn("h-full w-full object-contain", isLive ? "block" : "hidden")}
+      />
+      {!isLive ? (
         <div className="flex h-full items-center justify-center px-4 text-center text-sm font-semibold text-muted-foreground">
-          Waiting for frame
+          {statusLabel}
         </div>
-      )}
+      ) : null}
     </div>
   )
+}
+
+function useElementVisible(ref: RefObject<Element | null>) {
+  const [isVisible, setIsVisible] = useState(() => typeof IntersectionObserver === "undefined")
+
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+    if (typeof IntersectionObserver === "undefined") return
+    const observer = new IntersectionObserver(
+      ([entry]) => setIsVisible(Boolean(entry?.isIntersecting)),
+      { rootMargin: "160px", threshold: 0.1 },
+    )
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [ref])
+
+  return isVisible
+}
+
+function thumbnailStatusLabel(enabled: boolean, isVisible: boolean, status: string) {
+  if (!enabled) return "Stream offline"
+  if (!isVisible) return "Preview paused"
+  if (status === "unsupported") return "WebRTC unsupported"
+  if (status === "error") return "Preview unavailable"
+  if (status === "connecting") return "Connecting preview"
+  return "Waiting for preview"
 }
 
 function LiveRoundMonitor({
