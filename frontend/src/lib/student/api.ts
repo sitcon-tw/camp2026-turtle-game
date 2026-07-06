@@ -115,6 +115,8 @@ export function studentErrorMessage(error: unknown) {
       case "unauthorized":
         return "登入狀態已失效，請重新登入。"
       case "forbidden":
+        if (error.message === "submission deadline has passed") return "提交時間已結束，請等待主持人進入下一階段。"
+        if (error.message === "team authentication is required") return "請用隊伍帳號重新登入。"
         return "目前沒有權限執行此操作。"
       case "not_found":
         return "找不到指定的資料。"

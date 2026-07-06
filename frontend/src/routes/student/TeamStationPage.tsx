@@ -100,6 +100,7 @@ export default function TeamStationPage() {
   })
 
   const snapshot = game.data
+  const remainingSeconds = useRemainingSeconds(snapshot)
   const myTeam = me.data ?? null
   const leaderboardTeams = useMemo(() => leaderboard.data?.teams ?? [], [leaderboard.data?.teams])
   const teamNameById = useMemo(
@@ -112,6 +113,7 @@ export default function TeamStationPage() {
   const currentRoundId = snapshot?.state.current_round_id ?? null
   const localPreviewProgram = localPreview.roundId === currentRoundId ? localPreview.program : null
   const hasPreviewedForCurrentRound = previewGate.roundId === currentRoundId && previewGate.hasPreviewed
+  const submissionWindowOpen = remainingSeconds === null || remainingSeconds > 0
   const activePublicVoteDraft =
     publicVoteDraft.roundId === currentRoundId && publicVoteDraft.choices.length > 0
       ? publicVoteDraft.choices
@@ -289,7 +291,13 @@ export default function TeamStationPage() {
               program={localPreviewProgram}
               animationKey={`${currentRoundId ?? "no-round"}:${localPreview.animationKey}`}
               canPreview={Boolean(workspace && snapshot.challenge)}
-              canSubmit={Boolean(workspace && snapshot.challenge && hasPreviewedForCurrentRound && !submitDrawing.isPending)}
+              canSubmit={Boolean(
+                workspace &&
+                  snapshot.challenge &&
+                  hasPreviewedForCurrentRound &&
+                  submissionWindowOpen &&
+                  !submitDrawing.isPending,
+              )}
               isSubmitting={submitDrawing.isPending}
               onPreview={previewWorkspaceProgram}
               onSubmit={() => submitDrawing.mutate()}
@@ -796,7 +804,7 @@ function PhaseBadge({ phase }: { phase: GamePhase }) {
   return <Badge variant={phase === "idle" ? "outline" : "secondary"}>{phaseLabel(phase)}</Badge>
 }
 
-function useRemainingSeconds(snapshot: GameStateResponse) {
+function useRemainingSeconds(snapshot: GameStateResponse | null | undefined) {
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -804,7 +812,7 @@ function useRemainingSeconds(snapshot: GameStateResponse) {
     return () => window.clearInterval(timer)
   }, [])
 
-  if (!snapshot.state.phase_ends_at) return null
+  if (!snapshot?.state.phase_ends_at) return null
   return Math.max(0, Math.ceil((Date.parse(snapshot.state.phase_ends_at) - now) / 1_000))
 }
 
