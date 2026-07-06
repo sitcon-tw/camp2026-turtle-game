@@ -61,7 +61,10 @@ export default function AdminCommandCenterPage() {
   const [startForm, setStartForm] = useState<StartRoundForm>(defaultStartRoundForm)
   const [extendSeconds, setExtendSeconds] = useState("60")
   const [actionError, setActionError] = useState<string | null>(null)
-  const [selectedSubmissionId, setSelectedSubmissionId] = useState<string | null>(null)
+  const [selectedReplayCue, setSelectedReplayCue] = useState<{ roundId: string | null; submissionId: string | null }>({
+    roundId: null,
+    submissionId: null,
+  })
 
   const game = useQuery({
     queryKey: ["game", "state", "admin"],
@@ -100,6 +103,8 @@ export default function AdminCommandCenterPage() {
   })
 
   const snapshot = game.data
+  const currentRoundId = snapshot?.round?.id ?? null
+  const selectedSubmissionId = selectedReplayCue.roundId === currentRoundId ? selectedReplayCue.submissionId : null
   const enabledChallenges = useMemo(
     () => (challenges.data ?? []).filter((challenge) => challenge.enabled).sort((left, right) => left.order - right.order),
     [challenges.data],
@@ -275,20 +280,25 @@ export default function AdminCommandCenterPage() {
       </Card>
 
       <BlackboardControlPanel
+        snapshot={snapshot}
+        teams={allTeams}
         mode={blackboardControl.data?.display.mode ?? blackboard.data?.display.mode ?? "submission"}
-        selectedSubmissionId={blackboardControl.data?.display.selected_submission_id ?? blackboard.data?.selected_submission_id ?? null}
+        selectedReplaySubmissionId={selectedSubmissionId}
+        blackboardSelectedSubmissionId={blackboardControl.data?.display.selected_submission_id ?? blackboard.data?.selected_submission_id ?? null}
         selectedStreamSessionId={blackboardControl.data?.display.selected_stream_session_id ?? blackboard.data?.display.selected_stream_session_id ?? null}
         streamSessions={blackboardControl.data?.stream_sessions ?? blackboard.data?.stream_sessions ?? []}
         teamNameById={teamNameById}
         isPending={setBlackboardDisplay.isPending}
-        onMode={(mode) => {
-          if (mode === "submission") {
-            setBlackboardDisplay.mutate({ mode: "submission" })
-          }
-        }}
+        playingSubmissionId={playSubmission.variables ?? null}
+        isPlayingSubmission={playSubmission.isPending}
+        isClearingBlackboard={clearBlackboardPlayback.isPending}
+        onSelectSubmission={(submissionId) => setSelectedReplayCue({ roundId: currentRoundId, submissionId })}
+        onPlaySubmission={(submissionId) => playSubmission.mutate(submissionId)}
+        onClearBlackboard={() => clearBlackboardPlayback.mutate()}
         onSelectStream={(streamSessionId) => setBlackboardDisplay.mutate({ mode: "stream", stream_session_id: streamSessionId })}
         onRefresh={() => {
           void Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["game", "state", "admin"] }),
             queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] }),
             queryClient.invalidateQueries({ queryKey: ["admin", "blackboard", "control"] }),
           ])
@@ -297,17 +307,8 @@ export default function AdminCommandCenterPage() {
 
       <LiveRoundMonitor
         snapshot={snapshot}
-        teams={allTeams}
         leaderboard={leaderboardTeams}
         teamNameById={teamNameById}
-        selectedSubmissionId={selectedSubmissionId}
-        blackboardSelectedSubmissionId={blackboardControl.data?.display.selected_submission_id ?? blackboard.data?.selected_submission_id ?? null}
-        playingSubmissionId={playSubmission.variables ?? null}
-        isPlayingSubmission={playSubmission.isPending}
-        isClearingBlackboard={clearBlackboardPlayback.isPending}
-        onSelectSubmission={setSelectedSubmissionId}
-        onPlaySubmission={(submissionId) => playSubmission.mutate(submissionId)}
-        onClearBlackboard={() => clearBlackboardPlayback.mutate()}
         onRefresh={() => {
           void Promise.all([
             queryClient.invalidateQueries({ queryKey: ["game", "state", "admin"] }),
@@ -566,27 +567,56 @@ function PhaseTimeline({ phase }: { phase: GamePhase }) {
 }
 
 function BlackboardControlPanel({
+  snapshot,
+  teams,
   mode,
-  selectedSubmissionId,
+  selectedReplaySubmissionId,
+  blackboardSelectedSubmissionId,
   selectedStreamSessionId,
   streamSessions,
   teamNameById,
   isPending,
-  onMode,
+  playingSubmissionId,
+  isPlayingSubmission,
+  isClearingBlackboard,
+  onSelectSubmission,
+  onPlaySubmission,
+  onClearBlackboard,
   onSelectStream,
   onRefresh,
 }: {
+  snapshot: GameStateResponse
+  teams: Team[]
   mode: BlackboardDisplayMode
-  selectedSubmissionId: string | null
+  selectedReplaySubmissionId: string | null
+  blackboardSelectedSubmissionId: string | null
   selectedStreamSessionId: string | null
   streamSessions: BlackboardStreamSession[]
   teamNameById: Map<string, string>
   isPending: boolean
-  onMode: (mode: BlackboardDisplayMode) => void
+  playingSubmissionId: string | null
+  isPlayingSubmission: boolean
+  isClearingBlackboard: boolean
+  onSelectSubmission: (submissionId: string) => void
+  onPlaySubmission: (submissionId: string) => void
+  onClearBlackboard: () => void
   onSelectStream: (streamSessionId: string) => void
   onRefresh: () => void
 }) {
   const [activeTab, setActiveTab] = useState<BlackboardDisplayMode>(mode)
+  const blackboardSubmission = blackboardSelectedSubmissionId
+    ? snapshot.round_submissions.find((submission) => submission.id === blackboardSelectedSubmissionId) ?? null
+    : null
+  const selectedStreamSession = selectedStreamSessionId
+    ? streamSessions.find((session) => session.session_id === selectedStreamSessionId) ?? null
+    : null
+  const blackboardOutputLabel = mode === "stream"
+    ? selectedStreamSession
+      ? `${teamNameById.get(selectedStreamSession.team_id) ?? selectedStreamSession.team_id.slice(0, 8)} ${selectedStreamSession.label}`
+      : "Live stream"
+    : blackboardSubmission
+      ? `${teamNameById.get(blackboardSubmission.team_id) ?? blackboardSubmission.team_id.slice(0, 8)} #${blackboardSubmission.attempt_no}`
+      : "Submission counts"
   const sessionsByTeam = useMemo(() => {
     const grouped = new Map<string, BlackboardStreamSession[]>()
     for (const session of streamSessions) {
@@ -607,7 +637,7 @@ function BlackboardControlPanel({
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <CardTitle>Blackboard Controls</CardTitle>
-            <CardDescription>Switch between live session streaming and submission replay during Submission Open.</CardDescription>
+            <CardDescription>Choose exactly what appears on the public blackboard.</CardDescription>
           </div>
           <Button variant="outline" onClick={onRefresh}>
             <RefreshCwIcon data-icon="inline-start" />
@@ -615,13 +645,24 @@ function BlackboardControlPanel({
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="pt-4">
+      <CardContent className="grid gap-4 pt-4">
+        <div className="grid gap-3 rounded-[1rem] border-2 border-ink bg-surface-raised p-4 shadow-[3px_3px_0_rgba(23,35,58,0.12)] md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+          <div className="min-w-0">
+            <div className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground">Public board output</div>
+            <div className="mt-1 truncate text-xl font-black">{blackboardOutputLabel}</div>
+            <div className="mt-1 text-sm font-semibold text-muted-foreground">
+              {phaseLabel(snapshot.state.phase)} / {snapshot.challenge?.title ?? "No active challenge"} / {formatTimerValue(snapshot.state.phase_ends_at, snapshot.state.server_now)}
+            </div>
+          </div>
+          <Badge variant={mode === "stream" ? "secondary" : "outline"} className="w-fit font-black">
+            {mode === "stream" ? "Live Stream" : blackboardSubmission ? "Submission Replay" : "Counts"}
+          </Badge>
+        </div>
         <Tabs
           value={activeTab}
           onValueChange={(value) => {
             if (value === "submission" || value === "stream") {
               setActiveTab(value)
-              if (value === "submission") onMode(value)
             }
           }}
         >
@@ -668,25 +709,20 @@ function BlackboardControlPanel({
             )}
           </TabsContent>
           <TabsContent value="submission" className="mt-4">
-            <div className="grid gap-3 rounded-[1rem] border-2 border-ink bg-surface-raised p-4 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h3 className="font-black">Submission replay mode</h3>
-                  <p className="text-sm font-semibold text-muted-foreground">
-                    Use the replay deck below to preview a completed submission and send it to the public board.
-                  </p>
-                </div>
-                <Badge variant={mode === "submission" ? "secondary" : "outline"} className="w-fit font-black">
-                  {mode === "submission" ? "Active" : "Not active"}
-                </Badge>
-              </div>
-              <div className="rounded-[0.875rem] border border-border bg-card/80 px-3 py-3">
-                <div className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground">Public board</div>
-                <div className="mt-1 font-black">
-                  {selectedSubmissionId ? `Submission #${selectedSubmissionId.slice(0, 8)}` : "Submission counts"}
-                </div>
-              </div>
-            </div>
+            <SubmissionReplayDeck
+              snapshot={snapshot}
+              teams={teams}
+              mode={mode}
+              teamNameById={teamNameById}
+              selectedSubmissionId={selectedReplaySubmissionId}
+              blackboardSelectedSubmissionId={blackboardSelectedSubmissionId}
+              playingSubmissionId={playingSubmissionId}
+              isPlayingSubmission={isPlayingSubmission}
+              isClearingBlackboard={isClearingBlackboard}
+              onSelectSubmission={onSelectSubmission}
+              onPlaySubmission={onPlaySubmission}
+              onClearBlackboard={onClearBlackboard}
+            />
           </TabsContent>
         </Tabs>
       </CardContent>
@@ -806,40 +842,24 @@ function StreamSessionThumbnail({ sessionId, alt }: { sessionId: string; alt: st
 
 function LiveRoundMonitor({
   snapshot,
-  teams,
   leaderboard,
   teamNameById,
-  selectedSubmissionId,
-  blackboardSelectedSubmissionId,
-  playingSubmissionId,
-  isPlayingSubmission,
-  isClearingBlackboard,
-  onSelectSubmission,
-  onPlaySubmission,
-  onClearBlackboard,
   onRefresh,
 }: {
   snapshot: GameStateResponse
-  teams: Team[]
   leaderboard: LeaderboardEntry[]
   teamNameById: Map<string, string>
-  selectedSubmissionId: string | null
-  blackboardSelectedSubmissionId: string | null
-  playingSubmissionId: string | null
-  isPlayingSubmission: boolean
-  isClearingBlackboard: boolean
-  onSelectSubmission: (submissionId: string) => void
-  onPlaySubmission: (submissionId: string) => void
-  onClearBlackboard: () => void
   onRefresh: () => void
 }) {
+  const defaultTab = monitorDefaultTab(snapshot.state.phase)
+
   return (
     <Card>
       <CardHeader className="border-b">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <CardTitle>Live Round Monitor</CardTitle>
-            <CardDescription>Round submissions, nominations, public votes, and results.</CardDescription>
+            <CardDescription>Read-only nominations, public votes, results, and leaderboard context.</CardDescription>
           </div>
           <Button variant="outline" onClick={onRefresh}>
             <RefreshCwIcon data-icon="inline-start" />
@@ -848,29 +868,13 @@ function LiveRoundMonitor({
         </div>
       </CardHeader>
       <CardContent className="pt-4">
-        <Tabs defaultValue="submissions">
+        <Tabs key={defaultTab} defaultValue={defaultTab}>
           <TabsList className="w-full flex-wrap justify-start">
-            <TabsTrigger value="submissions">Submissions</TabsTrigger>
             <TabsTrigger value="nominations">Nominations</TabsTrigger>
             <TabsTrigger value="votes">Votes</TabsTrigger>
             <TabsTrigger value="results">Results</TabsTrigger>
             <TabsTrigger value="leaderboard">Leaderboard</TabsTrigger>
           </TabsList>
-          <TabsContent value="submissions" className="mt-4">
-            <SubmissionReplayDeck
-              snapshot={snapshot}
-              teams={teams}
-              teamNameById={teamNameById}
-              selectedSubmissionId={selectedSubmissionId}
-              blackboardSelectedSubmissionId={blackboardSelectedSubmissionId}
-              playingSubmissionId={playingSubmissionId}
-              isPlayingSubmission={isPlayingSubmission}
-              isClearingBlackboard={isClearingBlackboard}
-              onSelectSubmission={onSelectSubmission}
-              onPlaySubmission={onPlaySubmission}
-              onClearBlackboard={onClearBlackboard}
-            />
-          </TabsContent>
           <TabsContent value="nominations" className="mt-4">
             <NominationGrid snapshot={snapshot} teamNameById={teamNameById} />
           </TabsContent>
@@ -892,6 +896,7 @@ function LiveRoundMonitor({
 function SubmissionReplayDeck({
   snapshot,
   teams,
+  mode,
   teamNameById,
   selectedSubmissionId,
   blackboardSelectedSubmissionId,
@@ -904,6 +909,7 @@ function SubmissionReplayDeck({
 }: {
   snapshot: GameStateResponse
   teams: Team[]
+  mode: BlackboardDisplayMode
   teamNameById: Map<string, string>
   selectedSubmissionId: string | null
   blackboardSelectedSubmissionId: string | null
@@ -936,6 +942,7 @@ function SubmissionReplayDeck({
   }
 
   const selectedCanPlay = Boolean(selectedSubmission?.trace && selectedSubmission.status === "completed")
+  const canClearToCounts = mode !== "submission" || Boolean(blackboardSelectedSubmissionId)
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.08fr)_minmax(22rem,0.92fr)]">
@@ -1006,6 +1013,9 @@ function SubmissionReplayDeck({
                     ? `${teamNameById.get(blackboardSubmission.team_id) ?? blackboardSubmission.team_id.slice(0, 8)} #${blackboardSubmission.attempt_no}`
                     : "Submission counts"}
                 </div>
+                <div className="mt-1 text-xs font-bold text-muted-foreground">
+                  {mode === "stream" ? "Live stream is currently active" : blackboardSubmission ? "Replay is currently active" : "Default counts are live"}
+                </div>
               </div>
             </div>
             <div className="grid gap-2">
@@ -1023,7 +1033,7 @@ function SubmissionReplayDeck({
               </Button>
               <Button
                 variant="outline"
-                disabled={!blackboardSelectedSubmissionId || isClearingBlackboard}
+                disabled={!canClearToCounts || isClearingBlackboard}
                 onClick={onClearBlackboard}
               >
                 {isClearingBlackboard ? (
@@ -1031,7 +1041,7 @@ function SubmissionReplayDeck({
                 ) : (
                   <XIcon data-icon="inline-start" />
                 )}
-                Clear Blackboard
+                Clear to Counts
               </Button>
             </div>
           </aside>
@@ -1300,6 +1310,12 @@ function nextPhase(phase: GamePhase): GamePhase | null {
   return null
 }
 
+function monitorDefaultTab(phase: GamePhase) {
+  if (phase === "public_voting") return "votes"
+  if (phase === "round_complete") return "results"
+  return "nominations"
+}
+
 function phaseLabel(phase: GamePhase) {
   const labels: Record<GamePhase, string> = {
     idle: "Idle",
@@ -1322,6 +1338,11 @@ function formatTimer(seconds: number | null) {
   const minutes = Math.floor(seconds / 60)
   const rest = seconds % 60
   return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`
+}
+
+function formatTimerValue(deadline: string | null, serverNow: string) {
+  if (!deadline) return "--:--"
+  return formatTimer(Math.max(0, Math.ceil((Date.parse(deadline) - Date.parse(serverNow)) / 1_000)))
 }
 
 function formatClock(value: string) {
