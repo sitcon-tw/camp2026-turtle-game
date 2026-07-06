@@ -21,7 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useGameEvents } from "@/hooks/use-game-events"
 import { reactBlocklyToolboxCategories, registerTurtleBlocks, workspaceToBackendProgram } from "@/lib/blockly"
 import type { ChallengeCanvas } from "@/lib/blockly"
-import type { GamePhase, GameStateResponse, GameSubmission, LeaderboardEntry, PublicVoteChoice } from "@/lib/game/types"
+import type { GameChallenge, GamePhase, GameStateResponse, GameSubmission, LeaderboardEntry, PublicVoteChoice } from "@/lib/game/types"
 import { studentApi, studentErrorMessage } from "@/lib/student/api"
 import { getTeamDeviceId, getTeamToken } from "@/lib/student/session"
 import type { Team } from "@/lib/student/types"
@@ -45,12 +45,21 @@ type BlocklyWorkspaceSvgApi = {
   getToolbox: () => BlocklyToolboxApi | null
 }
 
+type LocalPreviewState = {
+  roundId: string | null
+  program: unknown | null
+  animationKey: number
+}
+
 export default function TeamStationPage() {
   const queryClient = useQueryClient()
   const token = getTeamToken()
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
-  const [previewProgram, setPreviewProgram] = useState<unknown | null>(null)
-  const [animationKey, setAnimationKey] = useState(0)
+  const [localPreview, setLocalPreview] = useState<LocalPreviewState>({
+    roundId: null,
+    program: null,
+    animationKey: 0,
+  })
   const [publicVoteDraft, setPublicVoteDraft] = useState<{ roundId: string | null; choices: PublicVoteChoice[] }>({
     roundId: null,
     choices: [],
@@ -89,10 +98,10 @@ export default function TeamStationPage() {
     [leaderboardTeams],
   )
   const mySubmissions = useMemo(() => sortSubmissions(snapshot?.my_submissions ?? []), [snapshot?.my_submissions])
-  const latestSubmission = mySubmissions[0] ?? null
   const selectedSubmissionId = snapshot?.my_team_selection_vote?.submission_id ?? null
   const publicVoteLimit = snapshot?.state.public_votes_per_team ?? 0
   const currentRoundId = snapshot?.state.current_round_id ?? null
+  const localPreviewProgram = localPreview.roundId === currentRoundId ? localPreview.program : null
   const activePublicVoteDraft =
     publicVoteDraft.roundId === currentRoundId && publicVoteDraft.choices.length > 0
       ? publicVoteDraft.choices
@@ -106,8 +115,11 @@ export default function TeamStationPage() {
       return { program, response }
     },
     onSuccess: async ({ program }) => {
-      setPreviewProgram(program)
-      setAnimationKey((key) => key + 1)
+      setLocalPreview((preview) => ({
+        roundId: currentRoundId,
+        program,
+        animationKey: preview.animationKey + 1,
+      }))
       setActionError(null)
       await queryClient.invalidateQueries({ queryKey: ["game", "state", "team"] })
     },
@@ -132,13 +144,16 @@ export default function TeamStationPage() {
     onError: (error) => setActionError(studentErrorMessage(error)),
   })
 
-  function executeProgram() {
+  function previewWorkspaceProgram() {
     if (!workspace || !snapshot?.challenge) return
 
     try {
       const program = workspaceToBackendProgram(workspace, { canvas: snapshot.challenge.canvas as ChallengeCanvas })
-      setPreviewProgram(program)
-      setAnimationKey((key) => key + 1)
+      setLocalPreview((preview) => ({
+        roundId: currentRoundId,
+        program,
+        animationKey: preview.animationKey + 1,
+      }))
       setActionError(null)
     } catch (error) {
       setActionError(studentErrorMessage(error))
@@ -234,9 +249,9 @@ export default function TeamStationPage() {
                   <CardDescription>{snapshot.challenge?.title ?? "目前回合"}</CardDescription>
                 </div>
                 <div className="flex gap-2">
-                  <Button variant="outline" onClick={executeProgram} disabled={!workspace || !snapshot.challenge}>
+                  <Button variant="outline" onClick={previewWorkspaceProgram} disabled={!workspace || !snapshot.challenge}>
                     <PlayIcon data-icon="inline-start" />
-                    執行
+                    預覽
                   </Button>
                   <Button
                     onClick={() => submitDrawing.mutate()}
@@ -266,12 +281,11 @@ export default function TeamStationPage() {
           </Card>
 
           <div className="grid gap-4">
+            <ChallengeImagePanel challenge={snapshot.challenge} />
             <PreviewPanel
               title="預覽"
-              program={previewProgram ?? latestSubmission?.block_program}
-              trace={latestSubmission?.trace}
-              resultImageUrl={latestSubmission?.result_image_url}
-              animationKey={animationKey}
+              program={localPreviewProgram}
+              animationKey={`${currentRoundId ?? "no-round"}:${localPreview.animationKey}`}
             />
             <MySubmissionList submissions={mySubmissions} selectedSubmissionId={selectedSubmissionId} />
           </div>
@@ -374,32 +388,52 @@ function StatTile({ label, value }: { label: string; value: string | number }) {
   )
 }
 
+function ChallengeImagePanel({ challenge }: { challenge: GameChallenge | null }) {
+  if (!challenge) return null
+
+  return (
+    <Card>
+      <CardHeader className="border-b">
+        <CardTitle>題目</CardTitle>
+        <CardDescription>{challenge.title}</CardDescription>
+      </CardHeader>
+      <CardContent className="pt-4">
+        <TurtlePreviewPanel
+          challenge={challenge}
+          title="目標圖"
+          sourceLabel={challenge.description}
+          className="h-64"
+          viewportClassName="h-[calc(100%-4.5rem)]"
+          showTarget
+          showTurtle={false}
+          footerStart={`${challenge.canvas.width} x ${challenge.canvas.height}`}
+          footerEnd={`${challenge.points} 分`}
+        />
+      </CardContent>
+    </Card>
+  )
+}
+
 function PreviewPanel({
   title,
   program,
-  trace,
-  resultImageUrl,
   animationKey,
 }: {
   title: string
-  program: unknown
-  trace: unknown
-  resultImageUrl?: string | null
-  animationKey: number
+  program: unknown | null
+  animationKey: string
 }) {
   return (
     <Card>
       <CardHeader className="border-b">
         <CardTitle>{title}</CardTitle>
-        <CardDescription>目前工作區與最新提交</CardDescription>
+        <CardDescription>本地預覽畫面，不會使用提交紀錄</CardDescription>
       </CardHeader>
       <CardContent className="pt-4">
         <TurtlePreviewPanel
           program={program}
-          trace={trace}
-          resultImageUrl={resultImageUrl}
-          title="Canvas"
-          sourceLabel={program || trace ? "preview" : "empty"}
+          title="本地 Canvas"
+          sourceLabel={program ? "local preview" : "empty"}
           className="h-80"
           viewportClassName="h-[calc(100%-4.5rem)]"
           animated

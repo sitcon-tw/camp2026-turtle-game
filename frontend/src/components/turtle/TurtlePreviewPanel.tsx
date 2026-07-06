@@ -1,7 +1,7 @@
 import { useMemo } from "react"
 
 import { cn } from "@/lib/utils"
-import { normalizeExecutionTrace, normalizeTurtleProgram, previewStats, traceFromProgram } from "@/lib/turtle"
+import { challengeTargetImageSrc, normalizeExecutionTrace, normalizeTurtleProgram, previewStats, traceFromProgram } from "@/lib/turtle"
 import type { ExecutionTrace, TraceStep, TurtleChallengeLike, TurtleProgram } from "@/lib/turtle"
 
 import { ChallengeRenderer } from "./ChallengeRenderer"
@@ -54,8 +54,9 @@ export function TurtlePreviewPanel({
   }, [program, trace])
   const hasProgram = program !== null && program !== undefined
   const hasTrace = trace !== null && trace !== undefined
-  const hasPreview = preview.lines.length > 0 || preview.stepCount !== null || Boolean(resultImageUrl)
-  const resolvedSourceLabel = sourceLabel ?? (hasTrace ? "trace" : hasProgram ? "block program" : "no program")
+  const hasTargetImage = showTarget && Boolean(challengeTargetImageSrc(challenge))
+  const hasPreview = preview.lines.length > 0 || preview.stepCount !== null || Boolean(resultImageUrl) || hasTargetImage
+  const resolvedSourceLabel = sourceLabel ?? (hasTrace ? "trace" : hasProgram ? "block program" : hasTargetImage ? "target" : "no program")
 
   return (
     <div
