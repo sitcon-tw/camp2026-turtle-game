@@ -51,6 +51,11 @@ type LocalPreviewState = {
   animationKey: number
 }
 
+type PreviewGateState = {
+  roundId: string | null
+  hasPreviewed: boolean
+}
+
 export default function TeamStationPage() {
   const queryClient = useQueryClient()
   const token = getTeamToken()
@@ -59,6 +64,10 @@ export default function TeamStationPage() {
     roundId: null,
     program: null,
     animationKey: 0,
+  })
+  const [previewGate, setPreviewGate] = useState<PreviewGateState>({
+    roundId: null,
+    hasPreviewed: false,
   })
   const [publicVoteDraft, setPublicVoteDraft] = useState<{ roundId: string | null; choices: PublicVoteChoice[] }>({
     roundId: null,
@@ -102,6 +111,7 @@ export default function TeamStationPage() {
   const publicVoteLimit = snapshot?.state.public_votes_per_team ?? 0
   const currentRoundId = snapshot?.state.current_round_id ?? null
   const localPreviewProgram = localPreview.roundId === currentRoundId ? localPreview.program : null
+  const hasPreviewedForCurrentRound = previewGate.roundId === currentRoundId && previewGate.hasPreviewed
   const activePublicVoteDraft =
     publicVoteDraft.roundId === currentRoundId && publicVoteDraft.choices.length > 0
       ? publicVoteDraft.choices
@@ -110,14 +120,18 @@ export default function TeamStationPage() {
   const submitDrawing = useMutation({
     mutationFn: async () => {
       if (!workspace || !snapshot?.challenge) throw new Error("工作區尚未準備好")
+      if (!hasPreviewedForCurrentRound) throw new Error("請先預覽作品，再提交。")
       const program = workspaceToBackendProgram(workspace, { canvas: snapshot.challenge.canvas as ChallengeCanvas })
       const response = await studentApi.createCurrentRoundSubmission(program)
-      return { program, response }
+      return { roundId: currentRoundId, response }
     },
-    onSuccess: async ({ program }) => {
+    onSuccess: async ({ roundId }) => {
+      setPreviewGate({
+        roundId,
+        hasPreviewed: false,
+      })
       setLocalPreview((preview) => ({
-        roundId: currentRoundId,
-        program,
+        ...preview,
         animationKey: preview.animationKey + 1,
       }))
       setActionError(null)
@@ -154,6 +168,10 @@ export default function TeamStationPage() {
         program,
         animationKey: preview.animationKey + 1,
       }))
+      setPreviewGate({
+        roundId: currentRoundId,
+        hasPreviewed: true,
+      })
       setActionError(null)
     } catch (error) {
       setActionError(studentErrorMessage(error))
@@ -271,7 +289,7 @@ export default function TeamStationPage() {
               program={localPreviewProgram}
               animationKey={`${currentRoundId ?? "no-round"}:${localPreview.animationKey}`}
               canPreview={Boolean(workspace && snapshot.challenge)}
-              canSubmit={Boolean(workspace && snapshot.challenge && !submitDrawing.isPending)}
+              canSubmit={Boolean(workspace && snapshot.challenge && hasPreviewedForCurrentRound && !submitDrawing.isPending)}
               isSubmitting={submitDrawing.isPending}
               onPreview={previewWorkspaceProgram}
               onSubmit={() => submitDrawing.mutate()}
