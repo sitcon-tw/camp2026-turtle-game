@@ -186,6 +186,9 @@ export type BlackboardStreamSession = {
   label: string
   connected: boolean
   desired_fps: number
+  snapshot_fps: number
+  media_active: boolean
+  media_target_fps: number
   latest_frame_seq: number
   last_seen_at: Timestamp
   last_frame_at: Timestamp | null

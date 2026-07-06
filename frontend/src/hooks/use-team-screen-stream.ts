@@ -6,6 +6,8 @@ const STREAM_SESSION_ID_KEY = "turtle-stream-session-id"
 const MAX_STREAM_WIDTH = 1280
 const JPEG_QUALITY = 0.62
 const REQUIRED_DISPLAY_SURFACE = "monitor"
+const SNAPSHOT_FPS_FALLBACK = 1
+const MEDIA_TARGET_FPS_FALLBACK = 30
 
 type DisplaySurface = "application" | "browser" | "monitor" | "window"
 
@@ -25,6 +27,9 @@ export function useTeamScreenStream(token: string | null) {
   const [captureVersion, setCaptureVersion] = useState(0)
   const streamRef = useRef<MediaStream | null>(null)
   const desiredFpsRef = useRef(1)
+  const snapshotFpsRef = useRef(SNAPSHOT_FPS_FALLBACK)
+  const mediaTargetFpsRef = useRef(MEDIA_TARGET_FPS_FALLBACK)
+  const peerConnectionsRef = useRef(new Map<string, RTCPeerConnection>())
 
   useEffect(() => {
     desiredFpsRef.current = desiredFps
@@ -43,7 +48,7 @@ export function useTeamScreenStream(token: string | null) {
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           displaySurface: REQUIRED_DISPLAY_SURFACE,
-          frameRate: { ideal: 12, max: 12 },
+          frameRate: { ideal: 30, max: 30 },
         },
         audio: false,
       })
@@ -91,6 +96,7 @@ export function useTeamScreenStream(token: string | null) {
     let frameTimer = 0
     let sendingFrame = false
     let activeSocket: WebSocket | null = null
+    const peerConnections = peerConnectionsRef.current
     const video = document.createElement("video")
     video.muted = true
     video.playsInline = true
@@ -120,9 +126,27 @@ export function useTeamScreenStream(token: string | null) {
 
       socket.addEventListener("message", (event) => {
         try {
-          const payload = JSON.parse(String(event.data)) as { type?: string; code?: string; desired_fps?: number; message?: string }
+          const payload = JSON.parse(String(event.data)) as StreamSocketPayload
           if (payload.type === "stream_control" && typeof payload.desired_fps === "number") {
             setDesiredFps(Math.max(1, Math.min(12, Math.floor(payload.desired_fps))))
+            if (typeof payload.snapshot_fps === "number") {
+              snapshotFpsRef.current = Math.max(1, Math.min(12, Math.floor(payload.snapshot_fps)))
+            }
+            if (typeof payload.media_target_fps === "number") {
+              mediaTargetFpsRef.current = Math.max(1, Math.min(60, Math.floor(payload.media_target_fps)))
+            }
+          }
+          if (payload.type === "webrtc_viewer_joined" && payload.viewer_id) {
+            void connectViewer(socket, payload.viewer_id)
+          }
+          if (payload.type === "webrtc_viewer_left" && payload.viewer_id) {
+            closePeerConnection(payload.viewer_id)
+          }
+          if (payload.type === "webrtc_answer" && payload.viewer_id && payload.sdp) {
+            void applyViewerAnswer(payload.viewer_id, payload.sdp)
+          }
+          if (payload.type === "webrtc_ice_candidate" && payload.viewer_id && payload.candidate) {
+            void addViewerIceCandidate(payload.viewer_id, payload.candidate)
           }
           if (payload.type === "stream_error") {
             setError(payload.message ?? "直播連線失敗。")
@@ -138,6 +162,7 @@ export function useTeamScreenStream(token: string | null) {
 
       socket.addEventListener("close", () => {
         window.clearTimeout(frameTimer)
+        closeAllPeerConnections()
         if (!cancelled && streamRef.current) {
           setStatus("connecting")
           reconnectTimer = window.setTimeout(connect, 2_000)
@@ -152,9 +177,10 @@ export function useTeamScreenStream(token: string | null) {
     function scheduleNextFrame(socket: WebSocket) {
       if (cancelled || socket.readyState !== WebSocket.OPEN) return
       const fps = desiredFpsRef.current
+      const snapshotFps = snapshotFpsRef.current || fps
       frameTimer = window.setTimeout(() => {
         void sendFrame(socket).finally(() => scheduleNextFrame(socket))
-      }, Math.max(83, Math.floor(1_000 / fps)))
+      }, Math.max(83, Math.floor(1_000 / snapshotFps)))
     }
 
     async function sendFrame(socket: WebSocket) {
@@ -175,12 +201,90 @@ export function useTeamScreenStream(token: string | null) {
       }
     }
 
+    async function connectViewer(socket: WebSocket, viewerId: string) {
+      closePeerConnection(viewerId)
+      if (socket.readyState !== WebSocket.OPEN || !streamRef.current) return
+
+      const peerConnection = new RTCPeerConnection({ iceServers: rtcIceServers() })
+      peerConnections.set(viewerId, peerConnection)
+      for (const track of streamRef.current.getVideoTracks()) {
+        applyMediaTargetFps(track, mediaTargetFpsRef.current)
+        peerConnection.addTrack(track, streamRef.current)
+      }
+      peerConnection.addEventListener("icecandidate", (event) => {
+        if (!event.candidate || socket.readyState !== WebSocket.OPEN) return
+        socket.send(JSON.stringify({
+          type: "webrtc_ice_candidate",
+          viewer_id: viewerId,
+          candidate: event.candidate.toJSON(),
+        }))
+      })
+      peerConnection.addEventListener("connectionstatechange", () => {
+        if (
+          peerConnection.connectionState === "failed" ||
+          peerConnection.connectionState === "closed" ||
+          peerConnection.connectionState === "disconnected"
+        ) {
+          closePeerConnection(viewerId)
+        }
+      })
+
+      try {
+        const offer = await peerConnection.createOffer()
+        await peerConnection.setLocalDescription(offer)
+        if (socket.readyState === WebSocket.OPEN && peerConnection.localDescription) {
+          socket.send(JSON.stringify({
+            type: "webrtc_offer",
+            viewer_id: viewerId,
+            sdp: peerConnection.localDescription.sdp,
+          }))
+        }
+      } catch {
+        closePeerConnection(viewerId)
+      }
+    }
+
+    async function applyViewerAnswer(viewerId: string, sdp: string) {
+      const peerConnection = peerConnections.get(viewerId)
+      if (!peerConnection || peerConnection.signalingState === "closed") return
+      try {
+        await peerConnection.setRemoteDescription({ type: "answer", sdp })
+      } catch {
+        closePeerConnection(viewerId)
+      }
+    }
+
+    async function addViewerIceCandidate(viewerId: string, candidate: RTCIceCandidateInit) {
+      const peerConnection = peerConnections.get(viewerId)
+      if (!peerConnection || peerConnection.signalingState === "closed") return
+      try {
+        await peerConnection.addIceCandidate(candidate)
+      } catch {
+        // Ignore candidates that arrive after a peer has closed or restarted.
+      }
+    }
+
+    function closePeerConnection(viewerId: string) {
+      const peerConnection = peerConnections.get(viewerId)
+      if (!peerConnection) return
+      peerConnection.close()
+      peerConnections.delete(viewerId)
+    }
+
+    function closeAllPeerConnections() {
+      for (const peerConnection of peerConnections.values()) {
+        peerConnection.close()
+      }
+      peerConnections.clear()
+    }
+
     connect()
 
     return () => {
       cancelled = true
       window.clearTimeout(reconnectTimer)
       window.clearTimeout(frameTimer)
+      closeAllPeerConnections()
       video.srcObject = null
       activeSocket?.close()
     }
@@ -193,6 +297,19 @@ export function useTeamScreenStream(token: string | null) {
     requestCapture,
     isBlocking: status !== "live",
   }
+}
+
+type StreamSocketPayload = {
+  type?: string
+  code?: string
+  desired_fps?: number
+  snapshot_fps?: number
+  media_active?: boolean
+  media_target_fps?: number
+  message?: string
+  viewer_id?: string
+  sdp?: string
+  candidate?: RTCIceCandidateInit
 }
 
 function supportsDisplayCapture() {
@@ -240,4 +357,32 @@ function canvasToBlob(canvas: HTMLCanvasElement) {
   return new Promise<Blob | null>((resolve) => {
     canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY)
   })
+}
+
+function applyMediaTargetFps(track: MediaStreamTrack, targetFps: number) {
+  const fps = mediaTargetFpsFromTrack(track, targetFps)
+  if (!fps) return
+  void track.applyConstraints({ frameRate: { ideal: fps, max: fps } }).catch(() => undefined)
+}
+
+function mediaTargetFpsFromTrack(track: MediaStreamTrack, targetFps: number) {
+  const capabilities = typeof track.getCapabilities === "function" ? track.getCapabilities() : null
+  const maxFrameRate = capabilities?.frameRate?.max
+  if (typeof maxFrameRate === "number") return Math.max(1, Math.min(targetFps, Math.floor(maxFrameRate)))
+  return Math.max(1, targetFps)
+}
+
+function rtcIceServers(): RTCIceServer[] {
+  const raw = import.meta.env.VITE_WEBRTC_ICE_SERVERS
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as RTCIceServer[]
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return raw
+      .split(",")
+      .map((url: string) => url.trim())
+      .filter(Boolean)
+      .map((urls: string) => ({ urls }))
+  }
 }
