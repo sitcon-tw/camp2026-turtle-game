@@ -696,7 +696,14 @@ function LeaderboardPanel({ leaderboard, results }: { leaderboard: LeaderboardEn
                     {roundPoints > 0 ? `本回合 +${roundPoints}` : `解出 ${team.solved_count}`}
                   </div>
                 </div>
-                <div className="font-mono text-2xl font-semibold tabular-nums lg:text-4xl">{team.total_score}</div>
+                <div className="flex shrink-0 flex-col items-end leading-none">
+                  <div className="font-mono text-2xl font-semibold tabular-nums lg:text-4xl">{team.total_score}</div>
+                  {roundPoints !== 0 ? (
+                    <div className={cn("mt-1 font-mono text-xs font-black tabular-nums lg:text-sm", scoreDiffClass(roundPoints))}>
+                      {formatScoreDiff(roundPoints)}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             )
           })
@@ -704,6 +711,17 @@ function LeaderboardPanel({ leaderboard, results }: { leaderboard: LeaderboardEn
       </div>
     </section>
   )
+}
+
+function formatScoreDiff(diff: number) {
+  if (diff > 0) return `+${diff}`
+  return `${diff}`
+}
+
+function scoreDiffClass(diff: number) {
+  if (diff > 0) return "text-emerald-600"
+  if (diff < 0) return "text-red-600"
+  return "text-muted-foreground"
 }
 
 function TimerBlock({ snapshot }: { snapshot: GameStateResponse }) {

@@ -748,12 +748,12 @@ impl GameStore {
                 .cmp(counts.get(&left.team_id).unwrap_or(&0))
                 .then(left.selected_at.cmp(&right.selected_at))
         });
-        let placement = [100, 70, 50];
         let mut results = Vec::new();
         let mut inputs = Vec::new();
+        let result_count = nominations.len();
         for (index, nomination) in nominations.into_iter().enumerate() {
             let vote_count = *counts.get(&nomination.team_id).unwrap_or(&0);
-            let placement_points = placement.get(index).copied().unwrap_or(0);
+            let placement_points = placement_points_for_rank(index + 1, result_count);
             let in_top_three = index < 3;
             let streak = if in_top_three {
                 inner
@@ -767,10 +767,7 @@ impl GameStore {
             };
             inner.top_three_streaks.insert(nomination.team_id, streak);
             let streak_bonus = if in_top_three {
-                i32::try_from(streak.saturating_sub(1))
-                    .unwrap_or(i32::MAX)
-                    .saturating_mul(10)
-                    .min(50)
+                streak_bonus_for_placement(placement_points, streak)
             } else {
                 0
             };
@@ -3004,6 +3001,39 @@ fn sort_challenges(challenges: &mut [Challenge]) {
     });
 }
 
+const PLACEMENT_MAX_POINTS: i32 = 1_000;
+const PLACEMENT_MIN_POINTS: i32 = 300;
+const PLACEMENT_DECAY: f64 = 1.35;
+const STREAK_BONUS_STEP: f64 = 0.03;
+const STREAK_BONUS_CAP: f64 = 0.15;
+
+fn placement_points_for_rank(rank: usize, total: usize) -> i32 {
+    if total == 0 || rank == 0 {
+        return 0;
+    }
+
+    if total == 1 {
+        return PLACEMENT_MAX_POINTS;
+    }
+
+    let rank_index = rank.saturating_sub(1) as f64;
+    let last_index = total.saturating_sub(1) as f64;
+    let normalized = 1.0 - (rank_index / last_index);
+    let points = f64::from(PLACEMENT_MIN_POINTS)
+        + f64::from(PLACEMENT_MAX_POINTS - PLACEMENT_MIN_POINTS) * normalized.powf(PLACEMENT_DECAY);
+
+    points.round() as i32
+}
+
+fn streak_bonus_for_placement(placement_points: i32, streak: u32) -> i32 {
+    if placement_points <= 0 || streak <= 1 {
+        return 0;
+    }
+
+    let bonus_rate = (f64::from(streak.saturating_sub(1)) * STREAK_BONUS_STEP).min(STREAK_BONUS_CAP);
+    (f64::from(placement_points) * bonus_rate).round() as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3167,12 +3197,12 @@ mod tests {
             .expect("round should score");
         assert_eq!(view.phase, GamePhase::RoundComplete);
         assert_eq!(results[0].team_id, team.id);
-        assert_eq!(results[0].placement_points, 100);
+        assert_eq!(results[0].placement_points, 1_000);
         let scored_team = store
             .get_team(team.id)
             .expect("store should read")
             .expect("team should exist");
-        assert_eq!(scored_team.total_score, 100);
+        assert_eq!(scored_team.total_score, 1_000);
     }
 
     #[test]
