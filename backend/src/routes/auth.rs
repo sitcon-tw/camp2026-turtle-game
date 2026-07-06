@@ -206,6 +206,7 @@ pub(super) fn map_store_error(error: StoreError) -> AppError {
         StoreError::LockUnavailable => AppError::internal("store lock is unavailable"),
         StoreError::DuplicateChallengeSlug
         | StoreError::DuplicateChallengePass
+        | StoreError::InvalidatedStreamSession
         | StoreError::NotFound { .. }
         | StoreError::SubmissionNotQueued
         | StoreError::ScoreOverflow

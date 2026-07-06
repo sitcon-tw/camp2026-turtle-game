@@ -215,6 +215,7 @@ struct BlackboardStreamSession {
     team_id: TeamId,
     device_id: String,
     label: String,
+    active_connection_id: String,
     connected: bool,
     latest_frame_seq: u64,
     last_seen_at: Timestamp,
@@ -226,6 +227,7 @@ struct BlackboardStreamSession {
 pub struct BlackboardStore {
     display: Arc<RwLock<BlackboardDisplay>>,
     stream_sessions: Arc<RwLock<HashMap<String, BlackboardStreamSession>>>,
+    invalidated_stream_session_ids: Arc<RwLock<HashSet<String>>>,
 }
 
 impl BlackboardStore {
@@ -275,8 +277,16 @@ impl BlackboardStore {
         session_id: String,
         team_id: TeamId,
         device_id: String,
+        connection_id: String,
     ) -> Result<BlackboardStreamSessionView, StoreError> {
         let now = Utc::now();
+        let invalidated_session_ids = self
+            .invalidated_stream_session_ids
+            .read()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        if invalidated_session_ids.contains(&session_id) {
+            return Err(StoreError::InvalidatedStreamSession);
+        }
         let mut sessions = self
             .stream_sessions
             .write()
@@ -299,6 +309,7 @@ impl BlackboardStore {
                 team_id,
                 device_id: device_id.clone(),
                 label,
+                active_connection_id: connection_id.clone(),
                 connected: false,
                 latest_frame_seq: 0,
                 last_seen_at: now,
@@ -307,26 +318,71 @@ impl BlackboardStore {
             });
         session.team_id = team_id;
         session.device_id = device_id;
+        session.active_connection_id = connection_id;
         session.connected = true;
         session.last_seen_at = now;
         Ok(self.session_view(session))
     }
 
-    pub fn disconnect_stream_session(&self, session_id: &str) -> Result<(), StoreError> {
+    pub fn disconnect_stream_session(
+        &self,
+        session_id: &str,
+        connection_id: &str,
+    ) -> Result<bool, StoreError> {
         let mut sessions = self
             .stream_sessions
             .write()
             .map_err(|_| StoreError::LockUnavailable)?;
         if let Some(session) = sessions.get_mut(session_id) {
+            if session.active_connection_id != connection_id {
+                return Ok(false);
+            }
             session.connected = false;
             session.last_seen_at = Utc::now();
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
+    }
+
+    pub fn expire_disconnected_stream_session(
+        &self,
+        session_id: &str,
+        connection_id: &str,
+    ) -> Result<bool, StoreError> {
+        let mut invalidated_session_ids = self
+            .invalidated_stream_session_ids
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        let mut sessions = self
+            .stream_sessions
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        let Some(session) = sessions.get(session_id) else {
+            return Ok(false);
+        };
+        if session.connected || session.active_connection_id != connection_id {
+            return Ok(false);
+        }
+        sessions.remove(session_id);
+        invalidated_session_ids.insert(session_id.to_owned());
+        let mut display = self
+            .display
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        if display
+            .selected_stream_session_id
+            .as_deref()
+            .is_some_and(|selected| selected == session_id)
+        {
+            *display = BlackboardDisplay::default();
+        }
+        Ok(true)
     }
 
     pub fn store_stream_frame(
         &self,
         session_id: &str,
+        connection_id: &str,
         bytes: Vec<u8>,
     ) -> Result<Option<BlackboardStreamSessionView>, StoreError> {
         let now = Utc::now();
@@ -337,6 +393,9 @@ impl BlackboardStore {
         let Some(session) = sessions.get_mut(session_id) else {
             return Ok(None);
         };
+        if session.active_connection_id != connection_id {
+            return Ok(None);
+        }
         session.connected = true;
         session.last_seen_at = now;
         session.last_frame_at = Some(now);
@@ -1471,6 +1530,8 @@ pub enum StoreError {
     DuplicateChallengeSlug,
     #[error("challenge pass score event already exists")]
     DuplicateChallengePass,
+    #[error("stream session id is invalid")]
+    InvalidatedStreamSession,
     #[error("{entity} was not found")]
     NotFound { entity: &'static str },
     #[error("submission is not queued")]
@@ -3280,6 +3341,100 @@ fn streak_bonus_for_placement(placement_points: i32, streak: u32) -> i32 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn expired_stream_session_is_removed_and_invalidated() {
+        let store = BlackboardStore::default();
+        let team_id = TeamId::from(uuid::Uuid::new_v4());
+
+        store
+            .register_stream_session(
+                "session-a".to_owned(),
+                team_id,
+                "device-a".to_owned(),
+                "connection-a".to_owned(),
+            )
+            .expect("stream session should register");
+
+        assert!(
+            !store
+                .expire_disconnected_stream_session("session-a", "connection-a")
+                .expect("connected session should not expire")
+        );
+
+        assert!(
+            store
+                .disconnect_stream_session("session-a", "connection-a")
+                .expect("session should disconnect")
+        );
+        assert!(
+            store
+                .expire_disconnected_stream_session("session-a", "connection-a")
+                .expect("offline session should expire")
+        );
+        assert!(
+            store
+                .stream_sessions()
+                .expect("sessions should read")
+                .is_empty()
+        );
+        assert!(matches!(
+            store.register_stream_session(
+                "session-a".to_owned(),
+                team_id,
+                "device-a".to_owned(),
+                "connection-b".to_owned(),
+            ),
+            Err(StoreError::InvalidatedStreamSession)
+        ));
+    }
+
+    #[test]
+    fn stale_stream_connection_cannot_disconnect_replacement() {
+        let store = BlackboardStore::default();
+        let team_id = TeamId::from(uuid::Uuid::new_v4());
+
+        store
+            .register_stream_session(
+                "session-a".to_owned(),
+                team_id,
+                "device-a".to_owned(),
+                "connection-a".to_owned(),
+            )
+            .expect("first stream session should register");
+        store
+            .register_stream_session(
+                "session-a".to_owned(),
+                team_id,
+                "device-a".to_owned(),
+                "connection-b".to_owned(),
+            )
+            .expect("replacement stream session should register");
+
+        assert!(
+            !store
+                .disconnect_stream_session("session-a", "connection-a")
+                .expect("stale connection should be ignored")
+        );
+        assert!(
+            !store
+                .expire_disconnected_stream_session("session-a", "connection-a")
+                .expect("stale connection should not expire replacement")
+        );
+        assert!(
+            store
+                .store_stream_frame("session-a", "connection-a", b"old-frame".to_vec())
+                .expect("stale frame should be ignored")
+                .is_none()
+        );
+
+        let session = store
+            .store_stream_frame("session-a", "connection-b", b"new-frame".to_vec())
+            .expect("active frame should store")
+            .expect("active session should exist");
+        assert!(session.connected);
+        assert_eq!(session.latest_frame_seq, 1);
+    }
 
     #[test]
     fn login_code_must_be_unique() {

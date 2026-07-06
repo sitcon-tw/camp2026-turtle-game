@@ -51,11 +51,16 @@ async fn admin_controls_stream_display_and_public_selected_frame() {
     .expect("admin token should issue");
     state
         .blackboard
-        .register_stream_session("session-a".to_owned(), team.id, "device-a".to_owned())
+        .register_stream_session(
+            "session-a".to_owned(),
+            team.id,
+            "device-a".to_owned(),
+            "connection-a".to_owned(),
+        )
         .expect("stream session should register");
     state
         .blackboard
-        .store_stream_frame("session-a", b"jpeg-frame".to_vec())
+        .store_stream_frame("session-a", "connection-a", b"jpeg-frame".to_vec())
         .expect("stream frame should store");
     let app = router(state.clone());
 
@@ -113,16 +118,12 @@ async fn admin_controls_stream_display_and_public_selected_frame() {
     let frame = app
         .clone()
         .oneshot(
-            get_request("/api/v1/blackboard/stream/frame?after=0", None)
-                .expect("request builds"),
+            get_request("/api/v1/blackboard/stream/frame?after=0", None).expect("request builds"),
         )
         .await
         .expect("request completes");
     assert_eq!(frame.status(), StatusCode::OK);
-    assert_eq!(
-        frame.headers().get("content-type").unwrap(),
-        "image/jpeg"
-    );
+    assert_eq!(frame.headers().get("content-type").unwrap(), "image/jpeg");
 
     let submission_display = app
         .clone()

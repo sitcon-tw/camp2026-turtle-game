@@ -117,6 +117,7 @@ fn store_error(error: StoreError) -> AppError {
         StoreError::DuplicateLoginCode
         | StoreError::DuplicateChallengeSlug
         | StoreError::DuplicateChallengePass
+        | StoreError::InvalidatedStreamSession
         | StoreError::SubmissionNotQueued
         | StoreError::ScoreOverflow
         | StoreError::AdminSetRequiresScore

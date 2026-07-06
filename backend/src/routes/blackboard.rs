@@ -30,13 +30,14 @@ use crate::{
     },
     state::{
         AppEvent, AppState, BlackboardDisplay, BlackboardDisplayMode, BlackboardStreamFrame,
-        BlackboardStreamSessionView,
+        BlackboardStreamSessionView, StoreError,
     },
 };
 
 const MAX_STREAM_FRAME_BYTES: usize = 700 * 1024;
 const STREAM_FRAME_WAIT_MS: u64 = 1_500;
 const STREAM_FRAME_POLL_MS: u64 = 80;
+const STREAM_SESSION_OFFLINE_EXPIRY_SECS: u64 = 30;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -308,12 +309,24 @@ async fn handle_team_stream_socket(state: AppState, mut socket: WebSocket) {
         _ => return,
     }
 
-    if state
-        .blackboard
-        .register_stream_session(hello.session_id.clone(), team_id, hello.device_id)
-        .is_err()
-    {
-        return;
+    let connection_id = Uuid::new_v4().to_string();
+    match state.blackboard.register_stream_session(
+        hello.session_id.clone(),
+        team_id,
+        hello.device_id,
+        connection_id.clone(),
+    ) {
+        Ok(_) => {}
+        Err(StoreError::InvalidatedStreamSession) => {
+            send_stream_error(
+                &mut socket,
+                "stream_session_invalid",
+                "stream session id is invalid",
+            )
+            .await;
+            return;
+        }
+        Err(_) => return,
     }
     publish_display_changed(&state);
     send_stream_control(&state, &mut socket, &hello.session_id).await;
@@ -325,9 +338,11 @@ async fn handle_team_stream_socket(state: AppState, mut socket: WebSocket) {
         match message {
             Message::Binary(bytes) => {
                 if bytes.len() <= MAX_STREAM_FRAME_BYTES {
-                    let _ = state
-                        .blackboard
-                        .store_stream_frame(&hello.session_id, bytes.to_vec());
+                    let _ = state.blackboard.store_stream_frame(
+                        &hello.session_id,
+                        &connection_id,
+                        bytes.to_vec(),
+                    );
                     publish_display_changed(&state);
                 }
                 send_stream_control(&state, &mut socket, &hello.session_id).await;
@@ -340,18 +355,60 @@ async fn handle_team_stream_socket(state: AppState, mut socket: WebSocket) {
         }
     }
 
-    let _ = state.blackboard.disconnect_stream_session(&hello.session_id);
-    publish_display_changed(&state);
+    if state
+        .blackboard
+        .disconnect_stream_session(&hello.session_id, &connection_id)
+        .unwrap_or(false)
+    {
+        publish_display_changed(&state);
+        schedule_stream_session_expiration_after(
+            state,
+            hello.session_id,
+            connection_id,
+            StdDuration::from_secs(STREAM_SESSION_OFFLINE_EXPIRY_SECS),
+        );
+    }
 }
 
 async fn send_stream_control(state: &AppState, socket: &mut WebSocket, session_id: &str) {
-    let desired_fps = state.blackboard.desired_fps_for_session(session_id).unwrap_or(1);
+    let desired_fps = state
+        .blackboard
+        .desired_fps_for_session(session_id)
+        .unwrap_or(1);
     if let Ok(payload) = serde_json::to_string(&StreamControlMessage {
         r#type: "stream_control",
         desired_fps,
     }) {
         let _ = socket.send(Message::Text(payload.into())).await;
     }
+}
+
+async fn send_stream_error(socket: &mut WebSocket, code: &'static str, message: &'static str) {
+    let _ = socket
+        .send(Message::Text(
+            json!({ "type": "stream_error", "code": code, "message": message })
+                .to_string()
+                .into(),
+        ))
+        .await;
+}
+
+fn schedule_stream_session_expiration_after(
+    state: AppState,
+    session_id: String,
+    connection_id: String,
+    delay: StdDuration,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        if state
+            .blackboard
+            .expire_disconnected_stream_session(&session_id, &connection_id)
+            .unwrap_or(false)
+        {
+            publish_display_changed(&state);
+        }
+    });
 }
 
 fn publish_display_changed(state: &AppState) {
@@ -442,4 +499,82 @@ fn sse_json_event(event: &AppEvent) -> Option<Result<Event, Infallible>> {
     serde_json::to_string(event)
         .ok()
         .map(|data| Ok(Event::default().event("message").data(data)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    #[tokio::test]
+    async fn scheduled_expiration_removes_disconnected_session_and_invalidates_id() {
+        let state = AppState::new(Config::default());
+        let team_id = TeamId::from(Uuid::new_v4());
+        let mut events = state.event_bus.subscribe();
+
+        state
+            .blackboard
+            .register_stream_session(
+                "session-a".to_owned(),
+                team_id,
+                "device-a".to_owned(),
+                "connection-a".to_owned(),
+            )
+            .expect("stream session should register");
+        state
+            .blackboard
+            .set_display(BlackboardDisplay {
+                mode: BlackboardDisplayMode::Stream,
+                selected_submission_id: None,
+                selected_stream_session_id: Some("session-a".to_owned()),
+            })
+            .expect("display should select stream");
+        assert!(
+            state
+                .blackboard
+                .disconnect_stream_session("session-a", "connection-a")
+                .expect("session should disconnect")
+        );
+
+        schedule_stream_session_expiration_after(
+            state.clone(),
+            "session-a".to_owned(),
+            "connection-a".to_owned(),
+            StdDuration::ZERO,
+        );
+
+        tokio::time::timeout(StdDuration::from_secs(1), async {
+            loop {
+                if state
+                    .blackboard
+                    .stream_sessions()
+                    .expect("sessions should read")
+                    .is_empty()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session should expire");
+
+        let display = state.blackboard.display().expect("display should read");
+        assert_eq!(display, BlackboardDisplay::default());
+        assert!(matches!(
+            state.blackboard.register_stream_session(
+                "session-a".to_owned(),
+                team_id,
+                "device-a".to_owned(),
+                "connection-b".to_owned(),
+            ),
+            Err(StoreError::InvalidatedStreamSession)
+        ));
+
+        let event = tokio::time::timeout(StdDuration::from_secs(1), events.recv())
+            .await
+            .expect("expiration should publish display event")
+            .expect("display event should send");
+        assert!(matches!(event, AppEvent::BlackboardDisplayChanged { .. }));
+    }
 }

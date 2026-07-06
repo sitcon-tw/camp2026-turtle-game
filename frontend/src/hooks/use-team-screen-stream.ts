@@ -97,10 +97,10 @@ export function useTeamScreenStream(token: string | null) {
     video.srcObject = stream
     const canvas = document.createElement("canvas")
     const context = canvas.getContext("2d")
-    const sessionId = getStreamSessionId()
 
     function connect() {
       if (cancelled) return
+      const sessionId = getStreamSessionId()
       setStatus("connecting")
       const socket = new WebSocket(streamSocketUrl())
       activeSocket = socket
@@ -120,12 +120,16 @@ export function useTeamScreenStream(token: string | null) {
 
       socket.addEventListener("message", (event) => {
         try {
-          const payload = JSON.parse(String(event.data)) as { type?: string; desired_fps?: number; message?: string }
+          const payload = JSON.parse(String(event.data)) as { type?: string; code?: string; desired_fps?: number; message?: string }
           if (payload.type === "stream_control" && typeof payload.desired_fps === "number") {
             setDesiredFps(Math.max(1, Math.min(12, Math.floor(payload.desired_fps))))
           }
           if (payload.type === "stream_error") {
             setError(payload.message ?? "直播連線失敗。")
+            if (payload.code === "stream_session_invalid") {
+              clearStreamSessionId(sessionId)
+              socket.close()
+            }
           }
         } catch {
           // Ignore malformed control messages.
@@ -219,6 +223,12 @@ function getStreamSessionId() {
   const sessionId = crypto.randomUUID()
   window.sessionStorage.setItem(STREAM_SESSION_ID_KEY, sessionId)
   return sessionId
+}
+
+function clearStreamSessionId(sessionId: string) {
+  if (window.sessionStorage.getItem(STREAM_SESSION_ID_KEY) === sessionId) {
+    window.sessionStorage.removeItem(STREAM_SESSION_ID_KEY)
+  }
 }
 
 function streamSocketUrl() {
