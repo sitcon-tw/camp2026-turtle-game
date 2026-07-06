@@ -248,23 +248,7 @@ export default function TeamStationPage() {
                   <CardTitle>作畫工作區</CardTitle>
                   <CardDescription>{snapshot.challenge?.title ?? "目前回合"}</CardDescription>
                 </div>
-                <div className="flex gap-2">
-                  <Button variant="outline" onClick={previewWorkspaceProgram} disabled={!workspace || !snapshot.challenge}>
-                    <PlayIcon data-icon="inline-start" />
-                    預覽
-                  </Button>
-                  <Button
-                    onClick={() => submitDrawing.mutate()}
-                    disabled={!workspace || !snapshot.challenge || submitDrawing.isPending}
-                  >
-                    {submitDrawing.isPending ? (
-                      <Loader2Icon data-icon="inline-start" className="animate-spin" />
-                    ) : (
-                      <SendIcon data-icon="inline-start" />
-                    )}
-                    提交
-                  </Button>
-                </div>
+                <WorkspaceTimer snapshot={snapshot} />
               </div>
             </CardHeader>
             <CardContent className="p-0">
@@ -286,6 +270,11 @@ export default function TeamStationPage() {
               title="預覽"
               program={localPreviewProgram}
               animationKey={`${currentRoundId ?? "no-round"}:${localPreview.animationKey}`}
+              canPreview={Boolean(workspace && snapshot.challenge)}
+              canSubmit={Boolean(workspace && snapshot.challenge && !submitDrawing.isPending)}
+              isSubmitting={submitDrawing.isPending}
+              onPreview={previewWorkspaceProgram}
+              onSubmit={() => submitDrawing.mutate()}
             />
             <MySubmissionList submissions={mySubmissions} selectedSubmissionId={selectedSubmissionId} />
           </div>
@@ -379,6 +368,17 @@ function TimerCard({ snapshot }: { snapshot: GameStateResponse }) {
   )
 }
 
+function WorkspaceTimer({ snapshot }: { snapshot: GameStateResponse }) {
+  const seconds = useRemainingSeconds(snapshot)
+
+  return (
+    <div className="inline-flex shrink-0 items-center gap-2 self-start rounded-full border-2 border-ink bg-surface-raised px-3 py-1.5 shadow-[2px_2px_0_rgba(23,35,58,0.14)]">
+      <ClockIcon className="size-4 text-muted-foreground" />
+      <span className="font-mono text-sm font-black tabular-nums">{formatTimer(seconds)}</span>
+    </div>
+  )
+}
+
 function StatTile({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="rounded-[1rem] border-2 border-ink bg-surface-raised p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]">
@@ -418,16 +418,44 @@ function PreviewPanel({
   title,
   program,
   animationKey,
+  canPreview,
+  canSubmit,
+  isSubmitting,
+  onPreview,
+  onSubmit,
 }: {
   title: string
   program: unknown | null
   animationKey: string
+  canPreview: boolean
+  canSubmit: boolean
+  isSubmitting: boolean
+  onPreview: () => void
+  onSubmit: () => void
 }) {
   return (
     <Card>
       <CardHeader className="border-b">
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>本地預覽畫面，不會使用提交紀錄</CardDescription>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle>{title}</CardTitle>
+            <CardDescription>本地預覽畫面，不會使用提交紀錄</CardDescription>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={onPreview} disabled={!canPreview}>
+              <PlayIcon data-icon="inline-start" />
+              預覽
+            </Button>
+            <Button onClick={onSubmit} disabled={!canSubmit}>
+              {isSubmitting ? (
+                <Loader2Icon data-icon="inline-start" className="animate-spin" />
+              ) : (
+                <SendIcon data-icon="inline-start" />
+              )}
+              提交
+            </Button>
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="pt-4">
         <TurtlePreviewPanel
