@@ -18,7 +18,7 @@ use crate::{
         CanvasConfig, Challenge, ChallengeId, ChallengeProgressStatus, ChallengeSet,
         ChallengeSetId, ChallengeSetStatus, GamePhase, GameStateView, PublicVote, PublicVoteChoice,
         Round, RoundId, RoundResultEntry, ScoreEvent, ScoreEventId, ScoreEventRefs, ScoreEventType,
-        Submission, SubmissionId, SubmissionStatus, Team, TeamId, TeamNomination,
+        Submission, SubmissionId, SubmissionStatus, Team, TeamId, TeamNomination, Timestamp,
         TeamSelectionVote,
     },
 };
@@ -127,6 +127,9 @@ pub enum AppEvent {
     BlackboardPlaybackChanged {
         submission_id: Option<SubmissionId>,
     },
+    BlackboardDisplayChanged {
+        display: BlackboardDisplay,
+    },
     ScoreRecorded {
         score_event: ScoreEvent,
     },
@@ -164,29 +167,268 @@ pub enum AppEvent {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlackboardDisplayMode {
+    Submission,
+    Stream,
+}
+
+impl Default for BlackboardDisplayMode {
+    fn default() -> Self {
+        Self::Submission
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BlackboardDisplay {
+    pub mode: BlackboardDisplayMode,
+    pub selected_submission_id: Option<SubmissionId>,
+    pub selected_stream_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BlackboardStreamSessionView {
+    pub session_id: String,
+    pub team_id: TeamId,
+    pub device_id: String,
+    pub label: String,
+    pub connected: bool,
+    pub desired_fps: u8,
+    pub latest_frame_seq: u64,
+    pub last_seen_at: Timestamp,
+    pub last_frame_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BlackboardStreamFrame {
+    pub session_id: String,
+    pub team_id: TeamId,
+    pub seq: u64,
+    pub captured_at: Timestamp,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+struct BlackboardStreamSession {
+    session_id: String,
+    team_id: TeamId,
+    device_id: String,
+    label: String,
+    connected: bool,
+    latest_frame_seq: u64,
+    last_seen_at: Timestamp,
+    last_frame_at: Option<Timestamp>,
+    latest_frame: Option<BlackboardStreamFrame>,
+}
+
 #[derive(Clone, Default)]
 pub struct BlackboardStore {
-    selected_submission_id: Arc<RwLock<Option<SubmissionId>>>,
+    display: Arc<RwLock<BlackboardDisplay>>,
+    stream_sessions: Arc<RwLock<HashMap<String, BlackboardStreamSession>>>,
 }
 
 impl BlackboardStore {
     pub fn selected_submission_id(&self) -> Result<Option<SubmissionId>, StoreError> {
-        self.selected_submission_id
+        self.display
             .read()
-            .map(|selected_submission_id| *selected_submission_id)
+            .map(|display| display.selected_submission_id)
             .map_err(|_| StoreError::LockUnavailable)
+    }
+
+    pub fn display(&self) -> Result<BlackboardDisplay, StoreError> {
+        self.display
+            .read()
+            .map(|display| display.clone())
+            .map_err(|_| StoreError::LockUnavailable)
+    }
+
+    pub fn set_display(&self, display: BlackboardDisplay) -> Result<BlackboardDisplay, StoreError> {
+        let mut guard = self
+            .display
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        *guard = display;
+        Ok(guard.clone())
+    }
+
+    pub fn reset_display(&self) -> Result<BlackboardDisplay, StoreError> {
+        self.set_display(BlackboardDisplay::default())
     }
 
     pub fn set_selected_submission_id(
         &self,
         submission_id: Option<SubmissionId>,
     ) -> Result<Option<SubmissionId>, StoreError> {
-        let mut selected_submission_id = self
-            .selected_submission_id
+        let mut display = self
+            .display
             .write()
             .map_err(|_| StoreError::LockUnavailable)?;
-        *selected_submission_id = submission_id;
-        Ok(*selected_submission_id)
+        display.mode = BlackboardDisplayMode::Submission;
+        display.selected_submission_id = submission_id;
+        display.selected_stream_session_id = None;
+        Ok(display.selected_submission_id)
+    }
+
+    pub fn register_stream_session(
+        &self,
+        session_id: String,
+        team_id: TeamId,
+        device_id: String,
+    ) -> Result<BlackboardStreamSessionView, StoreError> {
+        let now = Utc::now();
+        let mut sessions = self
+            .stream_sessions
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        let label = sessions
+            .get(&session_id)
+            .map(|session| session.label.clone())
+            .unwrap_or_else(|| {
+                let team_session_count = sessions
+                    .values()
+                    .filter(|session| session.team_id == team_id)
+                    .count()
+                    .saturating_add(1);
+                format!("Session {team_session_count}")
+            });
+        let session = sessions
+            .entry(session_id.clone())
+            .or_insert_with(|| BlackboardStreamSession {
+                session_id,
+                team_id,
+                device_id: device_id.clone(),
+                label,
+                connected: false,
+                latest_frame_seq: 0,
+                last_seen_at: now,
+                last_frame_at: None,
+                latest_frame: None,
+            });
+        session.team_id = team_id;
+        session.device_id = device_id;
+        session.connected = true;
+        session.last_seen_at = now;
+        Ok(self.session_view(session))
+    }
+
+    pub fn disconnect_stream_session(&self, session_id: &str) -> Result<(), StoreError> {
+        let mut sessions = self
+            .stream_sessions
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.connected = false;
+            session.last_seen_at = Utc::now();
+        }
+        Ok(())
+    }
+
+    pub fn store_stream_frame(
+        &self,
+        session_id: &str,
+        bytes: Vec<u8>,
+    ) -> Result<Option<BlackboardStreamSessionView>, StoreError> {
+        let now = Utc::now();
+        let mut sessions = self
+            .stream_sessions
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        let Some(session) = sessions.get_mut(session_id) else {
+            return Ok(None);
+        };
+        session.connected = true;
+        session.last_seen_at = now;
+        session.last_frame_at = Some(now);
+        session.latest_frame_seq = session.latest_frame_seq.saturating_add(1);
+        session.latest_frame = Some(BlackboardStreamFrame {
+            session_id: session.session_id.clone(),
+            team_id: session.team_id,
+            seq: session.latest_frame_seq,
+            captured_at: now,
+            bytes,
+        });
+        Ok(Some(self.session_view(session)))
+    }
+
+    pub fn stream_sessions(&self) -> Result<Vec<BlackboardStreamSessionView>, StoreError> {
+        let sessions = self
+            .stream_sessions
+            .read()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        let mut views: Vec<_> = sessions
+            .values()
+            .map(|session| self.session_view(session))
+            .collect();
+        views.sort_by(|left, right| {
+            left.team_id
+                .cmp(&right.team_id)
+                .then_with(|| left.label.cmp(&right.label))
+                .then_with(|| left.session_id.cmp(&right.session_id))
+        });
+        Ok(views)
+    }
+
+    pub fn stream_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<BlackboardStreamSessionView>, StoreError> {
+        let sessions = self
+            .stream_sessions
+            .read()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        Ok(sessions.get(session_id).map(|session| self.session_view(session)))
+    }
+
+    pub fn stream_frame(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<BlackboardStreamFrame>, StoreError> {
+        let sessions = self
+            .stream_sessions
+            .read()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        Ok(sessions
+            .get(session_id)
+            .and_then(|session| session.latest_frame.clone()))
+    }
+
+    pub fn selected_stream_frame(&self) -> Result<Option<BlackboardStreamFrame>, StoreError> {
+        let display = self.display()?;
+        let Some(session_id) = display.selected_stream_session_id else {
+            return Ok(None);
+        };
+        self.stream_frame(&session_id)
+    }
+
+    pub fn desired_fps_for_session(&self, session_id: &str) -> Result<u8, StoreError> {
+        let display = self.display()?;
+        Ok(if display.mode == BlackboardDisplayMode::Stream
+            && display
+                .selected_stream_session_id
+                .as_deref()
+                .is_some_and(|selected| selected == session_id)
+        {
+            12
+        } else {
+            1
+        })
+    }
+
+    fn session_view(&self, session: &BlackboardStreamSession) -> BlackboardStreamSessionView {
+        BlackboardStreamSessionView {
+            session_id: session.session_id.clone(),
+            team_id: session.team_id,
+            device_id: session.device_id.clone(),
+            label: session.label.clone(),
+            connected: session.connected,
+            desired_fps: self
+                .desired_fps_for_session(&session.session_id)
+                .unwrap_or(1),
+            latest_frame_seq: session.latest_frame_seq,
+            last_seen_at: session.last_seen_at,
+            last_frame_at: session.last_frame_at,
+        }
     }
 }
 

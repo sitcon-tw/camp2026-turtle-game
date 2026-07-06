@@ -165,6 +165,11 @@ async fn play_submission_on_blackboard(
         .publish(AppEvent::BlackboardPlaybackChanged {
             submission_id: Some(submission_id),
         });
+    state
+        .event_bus
+        .publish(AppEvent::BlackboardDisplayChanged {
+            display: state.blackboard.display()?,
+        });
     Ok(Json(BlackboardPlaybackResponse {
         played: true,
         submission_id,
@@ -434,7 +439,7 @@ async fn play_trace_for_blackboard(
     });
 }
 
-async fn play_completed_submission_for_blackboard(
+pub(crate) async fn play_completed_submission_for_blackboard(
     state: &AppState,
     submission_id: SubmissionId,
 ) -> Result<(), AppError> {
@@ -474,7 +479,9 @@ fn validated_program_value(value: Value) -> Result<Value, AppError> {
 
 fn event_visible_to_team(state: &AppState, team_id: TeamId, event: &AppEvent) -> bool {
     match event {
-        AppEvent::LeaderboardUpdated | AppEvent::BlackboardPlaybackChanged { .. } => false,
+        AppEvent::LeaderboardUpdated
+        | AppEvent::BlackboardPlaybackChanged { .. }
+        | AppEvent::BlackboardDisplayChanged { .. } => false,
         AppEvent::ScoreRecorded { score_event } => score_event.team_id == team_id,
         AppEvent::SubmissionUpdated { submission_id } => state
             .repository

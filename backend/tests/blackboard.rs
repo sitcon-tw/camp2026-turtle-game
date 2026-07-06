@@ -36,6 +36,114 @@ async fn blackboard_reports_idle_state_without_queue_fields() {
 }
 
 #[tokio::test]
+async fn admin_controls_stream_display_and_public_selected_frame() {
+    let state = AppState::new(Config::default());
+    let team = state
+        .repository
+        .create_team("Team", "TEAM", None)
+        .expect("team should create");
+    let admin_token = issue_token(
+        "admin",
+        Role::Admin,
+        Duration::from_secs(60),
+        state.auth_secret.as_ref(),
+    )
+    .expect("admin token should issue");
+    state
+        .blackboard
+        .register_stream_session("session-a".to_owned(), team.id, "device-a".to_owned())
+        .expect("stream session should register");
+    state
+        .blackboard
+        .store_stream_frame("session-a", b"jpeg-frame".to_vec())
+        .expect("stream frame should store");
+    let app = router(state.clone());
+
+    let unauthorized = app
+        .clone()
+        .oneshot(get_request("/api/v1/admin/blackboard/control", None).expect("request builds"))
+        .await
+        .expect("request completes");
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let control = app
+        .clone()
+        .oneshot(
+            get_request("/api/v1/admin/blackboard/control", Some(&admin_token))
+                .expect("request builds"),
+        )
+        .await
+        .expect("request completes");
+    assert_eq!(control.status(), StatusCode::OK);
+    let control_body = response_json(control).await;
+    assert_eq!(control_body["display"]["mode"], "submission");
+    assert_eq!(control_body["stream_sessions"].as_array().unwrap().len(), 1);
+
+    let stream_display = app
+        .clone()
+        .oneshot(
+            json_request(
+                "POST",
+                "/api/v1/admin/blackboard/display",
+                Some(&admin_token),
+                json!({ "mode": "stream", "stream_session_id": "session-a" }),
+            )
+            .expect("request builds"),
+        )
+        .await
+        .expect("request completes");
+    assert_eq!(stream_display.status(), StatusCode::OK);
+    let stream_body = response_json(stream_display).await;
+    assert_eq!(stream_body["display"]["mode"], "stream");
+    assert_eq!(
+        stream_body["display"]["selected_stream_session_id"],
+        "session-a"
+    );
+
+    let public_state = app
+        .clone()
+        .oneshot(get_request("/api/v1/blackboard/state", None).expect("request builds"))
+        .await
+        .expect("request completes");
+    assert_eq!(public_state.status(), StatusCode::OK);
+    let public_body = response_json(public_state).await;
+    assert_eq!(public_body["display"]["mode"], "stream");
+    assert_eq!(public_body["stream_sessions"].as_array().unwrap().len(), 1);
+
+    let frame = app
+        .clone()
+        .oneshot(
+            get_request("/api/v1/blackboard/stream/frame?after=0", None)
+                .expect("request builds"),
+        )
+        .await
+        .expect("request completes");
+    assert_eq!(frame.status(), StatusCode::OK);
+    assert_eq!(
+        frame.headers().get("content-type").unwrap(),
+        "image/jpeg"
+    );
+
+    let submission_display = app
+        .clone()
+        .oneshot(
+            json_request(
+                "POST",
+                "/api/v1/admin/blackboard/display",
+                Some(&admin_token),
+                json!({ "mode": "submission" }),
+            )
+            .expect("request builds"),
+        )
+        .await
+        .expect("request completes");
+    assert_eq!(submission_display.status(), StatusCode::OK);
+    let submission_body = response_json(submission_display).await;
+    assert_eq!(submission_body["display"]["mode"], "submission");
+    assert!(submission_body["display"]["selected_stream_session_id"].is_null());
+}
+
+#[tokio::test]
 async fn blackboard_events_stream_immediate_judge_steps() {
     let state = AppState::new(Config::default());
     let team = state
