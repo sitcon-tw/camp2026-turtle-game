@@ -2,14 +2,12 @@ use std::{convert::Infallible, time::Duration as StdDuration};
 
 use axum::{
     Json, Router,
-    body::Body,
     extract::{
         Path, Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderValue, StatusCode, header},
     response::{
-        IntoResponse, Response, Sse,
+        IntoResponse, Sse,
         sse::{Event, KeepAlive},
     },
     routing::{delete, get, post},
@@ -30,15 +28,14 @@ use crate::{
         LeaderboardEntry, leaderboard_entries, play_completed_submission_for_blackboard,
     },
     state::{
-        AppEvent, AppState, BlackboardDisplay, BlackboardDisplayMode, BlackboardStreamFrame,
-        BlackboardStreamSessionView, StoreError,
+        AppEvent, AppState, BlackboardDisplay, BlackboardDisplayMode, BlackboardStreamSessionView,
+        BlackboardViewerKind, StoreError,
     },
 };
 
-const MAX_STREAM_FRAME_BYTES: usize = 700 * 1024;
-const STREAM_FRAME_WAIT_MS: u64 = 1_500;
-const STREAM_FRAME_POLL_MS: u64 = 80;
 const STREAM_SESSION_OFFLINE_EXPIRY_SECS: u64 = 30;
+const PUBLIC_STREAM_TARGET_FPS: u8 = 60;
+const ADMIN_PREVIEW_TARGET_FPS: u8 = 2;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -46,12 +43,11 @@ pub fn router() -> Router<AppState> {
         .route("/blackboard/events", get(blackboard_events))
         .route("/blackboard/stream/team", get(team_stream_socket))
         .route("/blackboard/stream/viewer", get(stream_viewer_socket))
-        .route("/blackboard/stream/frame", get(selected_stream_frame))
         .route("/admin/blackboard/control", get(admin_blackboard_control))
         .route("/admin/blackboard/display", post(set_blackboard_display))
         .route(
-            "/admin/blackboard/stream-sessions/{session_id}/frame",
-            get(admin_stream_session_frame),
+            "/admin/blackboard/stream-sessions/{session_id}/viewer",
+            get(admin_stream_session_viewer_socket),
         )
         .route(
             "/admin/blackboard/playback",
@@ -227,9 +223,8 @@ async fn set_blackboard_display(
     });
     state
         .blackboard_signaling
-        .close_viewers_except(display.selected_stream_session_id.as_deref())
+        .close_public_viewers_except(display.selected_stream_session_id.as_deref())
         .await;
-    send_stream_controls_to_sessions(&state).await;
     Ok(Json(BlackboardControlState {
         selected_submission_id: display.selected_submission_id,
         display,
@@ -251,15 +246,6 @@ struct StreamHello {
     token: String,
     session_id: String,
     device_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct StreamControlMessage {
-    r#type: &'static str,
-    desired_fps: u8,
-    snapshot_fps: u8,
-    media_active: bool,
-    media_target_fps: u8,
 }
 
 async fn handle_team_stream_socket(state: AppState, mut socket: WebSocket) {
@@ -342,9 +328,6 @@ async fn handle_team_stream_socket(state: AppState, mut socket: WebSocket) {
         .await;
 
     let (mut socket_sender, mut socket_receiver) = socket.split();
-    if let Some(payload) = stream_control_payload(&state, &hello.session_id) {
-        let _ = socket_sender.send(Message::Text(payload.into())).await;
-    }
 
     loop {
         tokio::select! {
@@ -364,15 +347,6 @@ async fn handle_team_stream_socket(state: AppState, mut socket: WebSocket) {
                     break;
                 };
                 match message {
-                    Message::Binary(bytes) => {
-                        if bytes.len() <= MAX_STREAM_FRAME_BYTES {
-                            let _ = state.blackboard.store_stream_frame(
-                                &hello.session_id,
-                                &connection_id,
-                                bytes.to_vec(),
-                            );
-                        }
-                    }
                     Message::Text(text) => {
                         handle_team_signal_message(&state, &text).await;
                     }
@@ -437,36 +411,6 @@ async fn handle_team_signal_message(state: &AppState, text: &str) {
         .await;
 }
 
-async fn send_stream_controls_to_sessions(state: &AppState) {
-    let Ok(sessions) = state.blackboard.stream_sessions() else {
-        return;
-    };
-    for session in sessions {
-        if let Some(payload) = stream_control_payload(state, &session.session_id) {
-            let _ = state
-                .blackboard_signaling
-                .send_to_team(&session.session_id, payload)
-                .await;
-        }
-    }
-}
-
-fn stream_control_payload(state: &AppState, session_id: &str) -> Option<String> {
-    let media_active = selected_stream_session_matches(state, session_id);
-    let desired_fps = state
-        .blackboard
-        .desired_fps_for_session(session_id)
-        .unwrap_or(1);
-    serde_json::to_string(&StreamControlMessage {
-        r#type: "stream_control",
-        desired_fps,
-        snapshot_fps: 1,
-        media_active,
-        media_target_fps: if media_active { 30 } else { 1 },
-    })
-    .ok()
-}
-
 async fn send_stream_error(socket: &mut WebSocket, code: &'static str, message: &'static str) {
     let _ = socket
         .send(Message::Text(
@@ -487,7 +431,30 @@ async fn stream_viewer_socket(
     Query(query): Query<StreamViewerQuery>,
     upgrade: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    upgrade.on_upgrade(move |socket| handle_stream_viewer_socket(state, socket, query.session_id))
+    upgrade.on_upgrade(move |socket| {
+        handle_stream_viewer_socket(
+            state,
+            socket,
+            query.session_id,
+            BlackboardViewerKind::Public,
+            PUBLIC_STREAM_TARGET_FPS,
+        )
+    })
+}
+
+async fn admin_stream_session_viewer_socket(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    upgrade: WebSocketUpgrade,
+) -> impl IntoResponse {
+    upgrade.on_upgrade(move |socket| handle_admin_stream_viewer_socket(state, socket, session_id))
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminViewerHello {
+    #[serde(default)]
+    r#type: String,
+    token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -498,8 +465,65 @@ struct ViewerSignalMessage {
     candidate: Option<Value>,
 }
 
-async fn handle_stream_viewer_socket(state: AppState, mut socket: WebSocket, session_id: String) {
-    if !selected_stream_session_matches(&state, &session_id) {
+async fn handle_admin_stream_viewer_socket(
+    state: AppState,
+    mut socket: WebSocket,
+    session_id: String,
+) {
+    let Some(Ok(Message::Text(hello_text))) = socket.recv().await else {
+        return;
+    };
+    let Ok(hello) = serde_json::from_str::<AdminViewerHello>(&hello_text) else {
+        send_stream_error(
+            &mut socket,
+            "admin_auth_required",
+            "admin authentication is required",
+        )
+        .await;
+        return;
+    };
+    if hello.r#type != "hello" {
+        send_stream_error(
+            &mut socket,
+            "admin_auth_required",
+            "admin authentication is required",
+        )
+        .await;
+        return;
+    }
+    let Ok(user) = verify_token(&hello.token, &state.auth_secret) else {
+        send_stream_error(&mut socket, "token_invalid", "token is invalid").await;
+        return;
+    };
+    if user.role != Role::Admin {
+        send_stream_error(
+            &mut socket,
+            "admin_auth_required",
+            "admin authentication is required",
+        )
+        .await;
+        return;
+    }
+
+    handle_stream_viewer_socket(
+        state,
+        socket,
+        session_id,
+        BlackboardViewerKind::AdminPreview,
+        ADMIN_PREVIEW_TARGET_FPS,
+    )
+    .await;
+}
+
+async fn handle_stream_viewer_socket(
+    state: AppState,
+    mut socket: WebSocket,
+    session_id: String,
+    kind: BlackboardViewerKind,
+    target_fps: u8,
+) {
+    if kind == BlackboardViewerKind::Public && !selected_stream_session_matches(&state, &session_id)
+    {
         send_stream_error(
             &mut socket,
             "stream_session_not_selected",
@@ -513,7 +537,13 @@ async fn handle_stream_viewer_socket(state: AppState, mut socket: WebSocket, ses
     let (signal_tx, mut signal_rx) = mpsc::unbounded_channel();
     if !state
         .blackboard_signaling
-        .register_viewer(session_id.clone(), viewer_id.clone(), signal_tx)
+        .register_viewer(
+            session_id.clone(),
+            viewer_id.clone(),
+            kind,
+            target_fps,
+            signal_tx,
+        )
         .await
     {
         send_stream_error(
@@ -530,6 +560,8 @@ async fn handle_stream_viewer_socket(state: AppState, mut socket: WebSocket, ses
         "type": "webrtc_viewer_ready",
         "viewer_id": viewer_id,
         "session_id": session_id,
+        "viewer_kind": kind.as_str(),
+        "target_fps": target_fps,
     });
     if socket_sender
         .send(Message::Text(ready.to_string().into()))
@@ -642,69 +674,6 @@ fn publish_display_changed(state: &AppState) {
             .event_bus
             .publish(AppEvent::BlackboardDisplayChanged { display });
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamFrameQuery {
-    after: Option<u64>,
-}
-
-async fn selected_stream_frame(
-    State(state): State<AppState>,
-    Query(query): Query<StreamFrameQuery>,
-) -> Result<Response, AppError> {
-    let after = query.after.unwrap_or(0);
-    let deadline = tokio::time::Instant::now() + StdDuration::from_millis(STREAM_FRAME_WAIT_MS);
-    loop {
-        if let Some(frame) = state.blackboard.selected_stream_frame()? {
-            if frame.seq > after {
-                return Ok(stream_frame_response(frame));
-            }
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Ok(StatusCode::NO_CONTENT.into_response());
-        }
-        tokio::time::sleep(StdDuration::from_millis(STREAM_FRAME_POLL_MS)).await;
-    }
-}
-
-async fn admin_stream_session_frame(
-    AdminUser(_user): AdminUser,
-    State(state): State<AppState>,
-    Path(session_id): Path<String>,
-    Query(query): Query<StreamFrameQuery>,
-) -> Result<Response, AppError> {
-    let after = query.after.unwrap_or(0);
-    let Some(frame) = state.blackboard.stream_frame(&session_id)? else {
-        return Ok(StatusCode::NO_CONTENT.into_response());
-    };
-    if frame.seq <= after {
-        return Ok(StatusCode::NO_CONTENT.into_response());
-    }
-    Ok(stream_frame_response(frame))
-}
-
-fn stream_frame_response(frame: BlackboardStreamFrame) -> Response {
-    let mut response = Response::new(Body::from(frame.bytes));
-    let headers = response.headers_mut();
-    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg"));
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store, max-age=0"),
-    );
-    if let Ok(value) = HeaderValue::from_str(&frame.seq.to_string()) {
-        headers.insert("x-frame-seq", value);
-    }
-    if let Ok(value) = HeaderValue::from_str(&frame.session_id) {
-        headers.insert("x-stream-session-id", value);
-    }
-    if let Ok(value) = HeaderValue::from_str(&frame.team_id.as_uuid().to_string()) {
-        headers.insert("x-stream-team-id", value);
-    }
-    if let Ok(value) = HeaderValue::from_str(&frame.captured_at.to_rfc3339()) {
-        headers.insert("x-frame-captured-at", value);
-    }
-    response
 }
 
 async fn blackboard_events(

@@ -120,7 +120,23 @@ struct BlackboardTeamSignalEndpoint {
 
 struct BlackboardViewerSignalEndpoint {
     session_id: String,
+    kind: BlackboardViewerKind,
     sender: mpsc::UnboundedSender<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlackboardViewerKind {
+    Public,
+    AdminPreview,
+}
+
+impl BlackboardViewerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::AdminPreview => "admin_preview",
+        }
+    }
 }
 
 impl BlackboardSignalHub {
@@ -170,6 +186,8 @@ impl BlackboardSignalHub {
         &self,
         session_id: String,
         viewer_id: String,
+        kind: BlackboardViewerKind,
+        target_fps: u8,
         sender: mpsc::UnboundedSender<String>,
     ) -> bool {
         let mut inner = self.inner.lock().await;
@@ -177,11 +195,16 @@ impl BlackboardSignalHub {
             return false;
         };
         let _ = team.sender.send(format!(
-            r#"{{"type":"webrtc_viewer_joined","viewer_id":"{viewer_id}"}}"#
+            r#"{{"type":"webrtc_viewer_joined","viewer_id":"{viewer_id}","viewer_kind":"{}","target_fps":{target_fps}}}"#,
+            kind.as_str()
         ));
         inner.viewers.insert(
             viewer_id,
-            BlackboardViewerSignalEndpoint { session_id, sender },
+            BlackboardViewerSignalEndpoint {
+                session_id,
+                kind,
+                sender,
+            },
         );
         true
     }
@@ -193,7 +216,8 @@ impl BlackboardSignalHub {
         };
         if let Some(team) = inner.teams.get(&viewer.session_id) {
             let _ = team.sender.send(format!(
-                r#"{{"type":"webrtc_viewer_left","viewer_id":"{viewer_id}"}}"#
+                r#"{{"type":"webrtc_viewer_left","viewer_id":"{viewer_id}","viewer_kind":"{}"}}"#,
+                viewer.kind.as_str()
             ));
         }
     }
@@ -214,13 +238,15 @@ impl BlackboardSignalHub {
             .is_some_and(|viewer| viewer.sender.send(payload).is_ok())
     }
 
-    pub async fn close_viewers_except(&self, selected_session_id: Option<&str>) {
+    pub async fn close_public_viewers_except(&self, selected_session_id: Option<&str>) {
         let mut inner = self.inner.lock().await;
         let viewer_ids: Vec<_> = inner
             .viewers
             .iter()
             .filter_map(|(viewer_id, viewer)| {
-                (selected_session_id != Some(viewer.session_id.as_str())).then(|| viewer_id.clone())
+                (viewer.kind == BlackboardViewerKind::Public
+                    && selected_session_id != Some(viewer.session_id.as_str()))
+                .then(|| viewer_id.clone())
             })
             .collect();
         for viewer_id in viewer_ids {
@@ -230,7 +256,8 @@ impl BlackboardSignalHub {
                     .send(r#"{"type":"webrtc_stream_closed"}"#.to_owned());
                 if let Some(team) = inner.teams.get(&viewer.session_id) {
                     let _ = team.sender.send(format!(
-                        r#"{{"type":"webrtc_viewer_left","viewer_id":"{viewer_id}"}}"#
+                        r#"{{"type":"webrtc_viewer_left","viewer_id":"{viewer_id}","viewer_kind":"{}"}}"#,
+                        viewer.kind.as_str()
                     ));
                 }
             }
@@ -332,22 +359,7 @@ pub struct BlackboardStreamSessionView {
     pub device_id: String,
     pub label: String,
     pub connected: bool,
-    pub desired_fps: u8,
-    pub snapshot_fps: u8,
-    pub media_active: bool,
-    pub media_target_fps: u8,
-    pub latest_frame_seq: u64,
     pub last_seen_at: Timestamp,
-    pub last_frame_at: Option<Timestamp>,
-}
-
-#[derive(Debug, Clone)]
-pub struct BlackboardStreamFrame {
-    pub session_id: String,
-    pub team_id: TeamId,
-    pub seq: u64,
-    pub captured_at: Timestamp,
-    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -358,10 +370,7 @@ struct BlackboardStreamSession {
     label: String,
     active_connection_id: String,
     connected: bool,
-    latest_frame_seq: u64,
     last_seen_at: Timestamp,
-    last_frame_at: Option<Timestamp>,
-    latest_frame: Option<BlackboardStreamFrame>,
 }
 
 #[derive(Clone, Default)]
@@ -453,10 +462,7 @@ impl BlackboardStore {
                     label,
                     active_connection_id: connection_id.clone(),
                     connected: false,
-                    latest_frame_seq: 0,
                     last_seen_at: now,
-                    last_frame_at: None,
-                    latest_frame: None,
                 });
         session.team_id = team_id;
         session.device_id = device_id;
@@ -521,37 +527,6 @@ impl BlackboardStore {
         Ok(true)
     }
 
-    pub fn store_stream_frame(
-        &self,
-        session_id: &str,
-        connection_id: &str,
-        bytes: Vec<u8>,
-    ) -> Result<Option<BlackboardStreamSessionView>, StoreError> {
-        let now = Utc::now();
-        let mut sessions = self
-            .stream_sessions
-            .write()
-            .map_err(|_| StoreError::LockUnavailable)?;
-        let Some(session) = sessions.get_mut(session_id) else {
-            return Ok(None);
-        };
-        if session.active_connection_id != connection_id {
-            return Ok(None);
-        }
-        session.connected = true;
-        session.last_seen_at = now;
-        session.last_frame_at = Some(now);
-        session.latest_frame_seq = session.latest_frame_seq.saturating_add(1);
-        session.latest_frame = Some(BlackboardStreamFrame {
-            session_id: session.session_id.clone(),
-            team_id: session.team_id,
-            seq: session.latest_frame_seq,
-            captured_at: now,
-            bytes,
-        });
-        Ok(Some(self.session_view(session)))
-    }
-
     pub fn stream_sessions(&self) -> Result<Vec<BlackboardStreamSessionView>, StoreError> {
         let sessions = self
             .stream_sessions
@@ -583,61 +558,14 @@ impl BlackboardStore {
             .map(|session| self.session_view(session)))
     }
 
-    pub fn stream_frame(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<BlackboardStreamFrame>, StoreError> {
-        let sessions = self
-            .stream_sessions
-            .read()
-            .map_err(|_| StoreError::LockUnavailable)?;
-        Ok(sessions
-            .get(session_id)
-            .and_then(|session| session.latest_frame.clone()))
-    }
-
-    pub fn selected_stream_frame(&self) -> Result<Option<BlackboardStreamFrame>, StoreError> {
-        let display = self.display()?;
-        let Some(session_id) = display.selected_stream_session_id else {
-            return Ok(None);
-        };
-        self.stream_frame(&session_id)
-    }
-
-    pub fn desired_fps_for_session(&self, session_id: &str) -> Result<u8, StoreError> {
-        let display = self.display()?;
-        Ok(
-            if display.mode == BlackboardDisplayMode::Stream
-                && display
-                    .selected_stream_session_id
-                    .as_deref()
-                    .is_some_and(|selected| selected == session_id)
-            {
-                12
-            } else {
-                1
-            },
-        )
-    }
-
     fn session_view(&self, session: &BlackboardStreamSession) -> BlackboardStreamSessionView {
-        let desired_fps = self
-            .desired_fps_for_session(&session.session_id)
-            .unwrap_or(1);
-        let media_active = desired_fps > 1;
         BlackboardStreamSessionView {
             session_id: session.session_id.clone(),
             team_id: session.team_id,
             device_id: session.device_id.clone(),
             label: session.label.clone(),
             connected: session.connected,
-            desired_fps,
-            snapshot_fps: 1,
-            media_active,
-            media_target_fps: if media_active { 30 } else { 1 },
-            latest_frame_seq: session.latest_frame_seq,
             last_seen_at: session.last_seen_at,
-            last_frame_at: session.last_frame_at,
         }
     }
 }
@@ -3569,19 +3497,13 @@ mod tests {
                 .expire_disconnected_stream_session("session-a", "connection-a")
                 .expect("stale connection should not expire replacement")
         );
-        assert!(
-            store
-                .store_stream_frame("session-a", "connection-a", b"old-frame".to_vec())
-                .expect("stale frame should be ignored")
-                .is_none()
-        );
 
         let session = store
-            .store_stream_frame("session-a", "connection-b", b"new-frame".to_vec())
-            .expect("active frame should store")
+            .stream_session("session-a")
+            .expect("active session should read")
             .expect("active session should exist");
         assert!(session.connected);
-        assert_eq!(session.latest_frame_seq, 1);
+        assert_eq!(session.device_id, "device-a");
     }
 
     #[tokio::test]
@@ -3594,12 +3516,18 @@ mod tests {
             .await;
 
         assert!(
-            hub.register_viewer("session-a".to_owned(), "viewer-a".to_owned(), viewer_tx)
-                .await
+            hub.register_viewer(
+                "session-a".to_owned(),
+                "viewer-a".to_owned(),
+                BlackboardViewerKind::Public,
+                60,
+                viewer_tx,
+            )
+            .await
         );
         assert_eq!(
             recv_signal(&mut team_rx).await,
-            r#"{"type":"webrtc_viewer_joined","viewer_id":"viewer-a"}"#
+            r#"{"type":"webrtc_viewer_joined","viewer_id":"viewer-a","viewer_kind":"public","target_fps":60}"#
         );
 
         assert!(hub.send_to_viewer("viewer-a", "offer".to_owned()).await);
@@ -3611,34 +3539,58 @@ mod tests {
         hub.unregister_viewer("viewer-a").await;
         assert_eq!(
             recv_signal(&mut team_rx).await,
-            r#"{"type":"webrtc_viewer_left","viewer_id":"viewer-a"}"#
+            r#"{"type":"webrtc_viewer_left","viewer_id":"viewer-a","viewer_kind":"public"}"#
         );
     }
 
     #[tokio::test]
-    async fn blackboard_signaling_closes_unselected_viewers() {
+    async fn blackboard_signaling_closes_only_unselected_public_viewers() {
         let hub = BlackboardSignalHub::default();
         let (team_a_tx, mut team_a_rx) = mpsc::unbounded_channel();
         let (team_b_tx, mut team_b_rx) = mpsc::unbounded_channel();
         let (viewer_a_tx, mut viewer_a_rx) = mpsc::unbounded_channel();
         let (viewer_b_tx, mut viewer_b_rx) = mpsc::unbounded_channel();
+        let (admin_viewer_tx, mut admin_viewer_rx) = mpsc::unbounded_channel();
 
         hub.register_team("session-a".to_owned(), "connection-a".to_owned(), team_a_tx)
             .await;
         hub.register_team("session-b".to_owned(), "connection-b".to_owned(), team_b_tx)
             .await;
         assert!(
-            hub.register_viewer("session-a".to_owned(), "viewer-a".to_owned(), viewer_a_tx)
-                .await
+            hub.register_viewer(
+                "session-a".to_owned(),
+                "viewer-a".to_owned(),
+                BlackboardViewerKind::Public,
+                60,
+                viewer_a_tx,
+            )
+            .await
         );
         assert!(
-            hub.register_viewer("session-b".to_owned(), "viewer-b".to_owned(), viewer_b_tx)
-                .await
+            hub.register_viewer(
+                "session-b".to_owned(),
+                "viewer-b".to_owned(),
+                BlackboardViewerKind::Public,
+                60,
+                viewer_b_tx,
+            )
+            .await
+        );
+        assert!(
+            hub.register_viewer(
+                "session-b".to_owned(),
+                "admin-viewer".to_owned(),
+                BlackboardViewerKind::AdminPreview,
+                2,
+                admin_viewer_tx,
+            )
+            .await
         );
         let _ = recv_signal(&mut team_a_rx).await;
         let _ = recv_signal(&mut team_b_rx).await;
+        let _ = recv_signal(&mut team_b_rx).await;
 
-        hub.close_viewers_except(Some("session-a")).await;
+        hub.close_public_viewers_except(Some("session-a")).await;
 
         assert_eq!(
             recv_signal(&mut viewer_b_rx).await,
@@ -3646,14 +3598,20 @@ mod tests {
         );
         assert_eq!(
             recv_signal(&mut team_b_rx).await,
-            r#"{"type":"webrtc_viewer_left","viewer_id":"viewer-b"}"#
+            r#"{"type":"webrtc_viewer_left","viewer_id":"viewer-b","viewer_kind":"public"}"#
         );
         assert!(viewer_a_rx.try_recv().is_err());
+        assert!(admin_viewer_rx.try_recv().is_err());
         assert!(
             hub.send_to_viewer("viewer-a", "still-open".to_owned())
                 .await
         );
         assert_eq!(recv_signal(&mut viewer_a_rx).await, "still-open");
+        assert!(
+            hub.send_to_viewer("admin-viewer", "preview-open".to_owned())
+                .await
+        );
+        assert_eq!(recv_signal(&mut admin_viewer_rx).await, "preview-open");
     }
 
     #[test]

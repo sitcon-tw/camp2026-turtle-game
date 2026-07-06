@@ -36,7 +36,7 @@ async fn blackboard_reports_idle_state_without_queue_fields() {
 }
 
 #[tokio::test]
-async fn admin_controls_stream_display_and_public_selected_frame() {
+async fn admin_controls_stream_display_without_frame_polling_routes() {
     let state = AppState::new(Config::default());
     let team = state
         .repository
@@ -58,10 +58,6 @@ async fn admin_controls_stream_display_and_public_selected_frame() {
             "connection-a".to_owned(),
         )
         .expect("stream session should register");
-    state
-        .blackboard
-        .store_stream_frame("session-a", "connection-a", b"jpeg-frame".to_vec())
-        .expect("stream frame should store");
     let app = router(state.clone());
 
     let unauthorized = app
@@ -115,15 +111,27 @@ async fn admin_controls_stream_display_and_public_selected_frame() {
     assert_eq!(public_body["display"]["mode"], "stream");
     assert_eq!(public_body["stream_sessions"].as_array().unwrap().len(), 1);
 
-    let frame = app
+    let public_frame = app
         .clone()
         .oneshot(
             get_request("/api/v1/blackboard/stream/frame?after=0", None).expect("request builds"),
         )
         .await
         .expect("request completes");
-    assert_eq!(frame.status(), StatusCode::OK);
-    assert_eq!(frame.headers().get("content-type").unwrap(), "image/jpeg");
+    assert_eq!(public_frame.status(), StatusCode::NOT_FOUND);
+
+    let admin_frame = app
+        .clone()
+        .oneshot(
+            get_request(
+                "/api/v1/admin/blackboard/stream-sessions/session-a/frame?after=0",
+                Some(&admin_token),
+            )
+            .expect("request builds"),
+        )
+        .await
+        .expect("request completes");
+    assert_eq!(admin_frame.status(), StatusCode::NOT_FOUND);
 
     let submission_display = app
         .clone()
