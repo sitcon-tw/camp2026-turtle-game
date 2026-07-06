@@ -140,9 +140,9 @@ async fn admin_controls_full_round_and_teams_vote_to_score() {
     assert_eq!(scored_body["state"]["phase"], "round_complete");
     let results = scored_body["results"].as_array().expect("results");
     assert_eq!(results.len(), 3);
-    assert_eq!(results[0]["placement_points"], 100);
-    assert_eq!(results[1]["placement_points"], 70);
-    assert_eq!(results[2]["placement_points"], 50);
+    assert_eq!(results[0]["placement_points"], 1_000);
+    assert_eq!(results[1]["placement_points"], 575);
+    assert_eq!(results[2]["placement_points"], 300);
 
     let leaderboard = get_request(app, "/api/v1/leaderboard", None).await;
     assert_eq!(leaderboard.status(), StatusCode::OK);
