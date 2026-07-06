@@ -3,11 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { getTeamDeviceId } from "@/lib/student/session"
 
 const STREAM_SESSION_ID_KEY = "turtle-stream-session-id"
-const MAX_STREAM_WIDTH = 1280
-const JPEG_QUALITY = 0.62
 const REQUIRED_DISPLAY_SURFACE = "monitor"
-const SNAPSHOT_FPS_FALLBACK = 1
-const MEDIA_TARGET_FPS_FALLBACK = 30
+const PUBLIC_STREAM_TARGET_FPS = 60
 
 type DisplaySurface = "application" | "browser" | "monitor" | "window"
 
@@ -23,17 +20,9 @@ export function useTeamScreenStream(token: string | null) {
     supportsDisplayCapture() ? "permission_required" : "unsupported",
   )
   const [error, setError] = useState<string | null>(null)
-  const [desiredFps, setDesiredFps] = useState(1)
   const [captureVersion, setCaptureVersion] = useState(0)
   const streamRef = useRef<MediaStream | null>(null)
-  const desiredFpsRef = useRef(1)
-  const snapshotFpsRef = useRef(SNAPSHOT_FPS_FALLBACK)
-  const mediaTargetFpsRef = useRef(MEDIA_TARGET_FPS_FALLBACK)
   const peerConnectionsRef = useRef(new Map<string, RTCPeerConnection>())
-
-  useEffect(() => {
-    desiredFpsRef.current = desiredFps
-  }, [desiredFps])
 
   const requestCapture = useCallback(async () => {
     if (!supportsDisplayCapture()) {
@@ -48,7 +37,7 @@ export function useTeamScreenStream(token: string | null) {
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           displaySurface: REQUIRED_DISPLAY_SURFACE,
-          frameRate: { ideal: 30, max: 30 },
+          frameRate: { ideal: PUBLIC_STREAM_TARGET_FPS, max: PUBLIC_STREAM_TARGET_FPS },
         },
         audio: false,
       })
@@ -76,7 +65,6 @@ export function useTeamScreenStream(token: string | null) {
       setStatus(token ? "connecting" : "permission_required")
       videoTrack.addEventListener("ended", () => {
         streamRef.current = null
-        setDesiredFps(1)
         setStatus("permission_required")
         setError("直播分享已停止，請重新允許畫面直播。")
       })
@@ -93,16 +81,8 @@ export function useTeamScreenStream(token: string | null) {
 
     let cancelled = false
     let reconnectTimer = 0
-    let frameTimer = 0
-    let sendingFrame = false
     let activeSocket: WebSocket | null = null
     const peerConnections = peerConnectionsRef.current
-    const video = document.createElement("video")
-    video.muted = true
-    video.playsInline = true
-    video.srcObject = stream
-    const canvas = document.createElement("canvas")
-    const context = canvas.getContext("2d")
 
     function connect() {
       if (cancelled) return
@@ -120,24 +100,13 @@ export function useTeamScreenStream(token: string | null) {
           device_id: getTeamDeviceId(),
         }))
         setStatus("live")
-        void video.play()
-        scheduleNextFrame(socket)
       })
 
       socket.addEventListener("message", (event) => {
         try {
           const payload = JSON.parse(String(event.data)) as StreamSocketPayload
-          if (payload.type === "stream_control" && typeof payload.desired_fps === "number") {
-            setDesiredFps(Math.max(1, Math.min(12, Math.floor(payload.desired_fps))))
-            if (typeof payload.snapshot_fps === "number") {
-              snapshotFpsRef.current = Math.max(1, Math.min(12, Math.floor(payload.snapshot_fps)))
-            }
-            if (typeof payload.media_target_fps === "number") {
-              mediaTargetFpsRef.current = Math.max(1, Math.min(60, Math.floor(payload.media_target_fps)))
-            }
-          }
           if (payload.type === "webrtc_viewer_joined" && payload.viewer_id) {
-            void connectViewer(socket, payload.viewer_id)
+            void connectViewer(socket, payload.viewer_id, normalizeTargetFps(payload.target_fps))
           }
           if (payload.type === "webrtc_viewer_left" && payload.viewer_id) {
             closePeerConnection(payload.viewer_id)
@@ -161,7 +130,6 @@ export function useTeamScreenStream(token: string | null) {
       })
 
       socket.addEventListener("close", () => {
-        window.clearTimeout(frameTimer)
         closeAllPeerConnections()
         if (!cancelled && streamRef.current) {
           setStatus("connecting")
@@ -174,42 +142,15 @@ export function useTeamScreenStream(token: string | null) {
       })
     }
 
-    function scheduleNextFrame(socket: WebSocket) {
-      if (cancelled || socket.readyState !== WebSocket.OPEN) return
-      const fps = desiredFpsRef.current
-      const snapshotFps = snapshotFpsRef.current || fps
-      frameTimer = window.setTimeout(() => {
-        void sendFrame(socket).finally(() => scheduleNextFrame(socket))
-      }, Math.max(83, Math.floor(1_000 / snapshotFps)))
-    }
-
-    async function sendFrame(socket: WebSocket) {
-      if (!context || sendingFrame || socket.readyState !== WebSocket.OPEN || socket.bufferedAmount > 1_000_000) return
-      if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth || !video.videoHeight) return
-      sendingFrame = true
-      try {
-        const scale = Math.min(1, MAX_STREAM_WIDTH / video.videoWidth)
-        canvas.width = Math.max(1, Math.floor(video.videoWidth * scale))
-        canvas.height = Math.max(1, Math.floor(video.videoHeight * scale))
-        context.drawImage(video, 0, 0, canvas.width, canvas.height)
-        const blob = await canvasToBlob(canvas)
-        if (blob && socket.readyState === WebSocket.OPEN) {
-          socket.send(await blob.arrayBuffer())
-        }
-      } finally {
-        sendingFrame = false
-      }
-    }
-
-    async function connectViewer(socket: WebSocket, viewerId: string) {
+    async function connectViewer(socket: WebSocket, viewerId: string, targetFps: number) {
       closePeerConnection(viewerId)
       if (socket.readyState !== WebSocket.OPEN || !streamRef.current) return
 
       const peerConnection = new RTCPeerConnection({ iceServers: rtcIceServers() })
       peerConnections.set(viewerId, peerConnection)
       for (const track of streamRef.current.getVideoTracks()) {
-        applyMediaTargetFps(track, mediaTargetFpsRef.current)
-        peerConnection.addTrack(track, streamRef.current)
+        const sender = peerConnection.addTrack(track, streamRef.current)
+        void applySenderTargetFps(sender, targetFps)
       }
       peerConnection.addEventListener("icecandidate", (event) => {
         if (!event.candidate || socket.readyState !== WebSocket.OPEN) return
@@ -283,9 +224,7 @@ export function useTeamScreenStream(token: string | null) {
     return () => {
       cancelled = true
       window.clearTimeout(reconnectTimer)
-      window.clearTimeout(frameTimer)
       closeAllPeerConnections()
-      video.srcObject = null
       activeSocket?.close()
     }
   }, [captureVersion, token])
@@ -293,7 +232,6 @@ export function useTeamScreenStream(token: string | null) {
   return {
     status,
     error,
-    desiredFps,
     requestCapture,
     isBlocking: status !== "live",
   }
@@ -302,12 +240,10 @@ export function useTeamScreenStream(token: string | null) {
 type StreamSocketPayload = {
   type?: string
   code?: string
-  desired_fps?: number
-  snapshot_fps?: number
-  media_active?: boolean
-  media_target_fps?: number
   message?: string
   viewer_id?: string
+  viewer_kind?: string
+  target_fps?: number
   sdp?: string
   candidate?: RTCIceCandidateInit
 }
@@ -353,23 +289,25 @@ function streamSocketUrl() {
   return `${protocol}//${window.location.host}/api/v1/blackboard/stream/team`
 }
 
-function canvasToBlob(canvas: HTMLCanvasElement) {
-  return new Promise<Blob | null>((resolve) => {
-    canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY)
-  })
+function normalizeTargetFps(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(1, Math.min(PUBLIC_STREAM_TARGET_FPS, Math.floor(value)))
+    : PUBLIC_STREAM_TARGET_FPS
 }
 
-function applyMediaTargetFps(track: MediaStreamTrack, targetFps: number) {
-  const fps = mediaTargetFpsFromTrack(track, targetFps)
-  if (!fps) return
-  void track.applyConstraints({ frameRate: { ideal: fps, max: fps } }).catch(() => undefined)
-}
-
-function mediaTargetFpsFromTrack(track: MediaStreamTrack, targetFps: number) {
-  const capabilities = typeof track.getCapabilities === "function" ? track.getCapabilities() : null
-  const maxFrameRate = capabilities?.frameRate?.max
-  if (typeof maxFrameRate === "number") return Math.max(1, Math.min(targetFps, Math.floor(maxFrameRate)))
-  return Math.max(1, targetFps)
+async function applySenderTargetFps(sender: RTCRtpSender, targetFps: number) {
+  if (typeof sender.getParameters !== "function" || typeof sender.setParameters !== "function") return
+  const parameters = sender.getParameters()
+  parameters.encodings = parameters.encodings?.length ? parameters.encodings : [{}]
+  parameters.encodings = parameters.encodings.map((encoding) => ({
+    ...encoding,
+    maxFramerate: targetFps,
+  }))
+  try {
+    await sender.setParameters(parameters)
+  } catch {
+    // Browser support varies; WebRTC congestion control still provides best effort.
+  }
 }
 
 function rtcIceServers(): RTCIceServer[] {
