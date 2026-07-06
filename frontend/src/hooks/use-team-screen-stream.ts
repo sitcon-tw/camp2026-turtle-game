@@ -5,6 +5,9 @@ import { getTeamDeviceId } from "@/lib/student/session"
 const STREAM_SESSION_ID_KEY = "turtle-stream-session-id"
 const MAX_STREAM_WIDTH = 1280
 const JPEG_QUALITY = 0.62
+const REQUIRED_DISPLAY_SURFACE = "monitor"
+
+type DisplaySurface = "application" | "browser" | "monitor" | "window"
 
 export type TeamScreenStreamStatus =
   | "permission_required"
@@ -35,17 +38,38 @@ export function useTeamScreenStream(token: string | null) {
     }
 
     try {
+      if (streamRef.current) stopMediaStream(streamRef.current)
+
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
+          displaySurface: REQUIRED_DISPLAY_SURFACE,
           frameRate: { ideal: 12, max: 12 },
         },
         audio: false,
       })
+      const videoTrack = stream.getVideoTracks()[0]
+      if (!videoTrack) {
+        stopMediaStream(stream)
+        setStatus("permission_required")
+        setError("沒有取得可直播的螢幕畫面，請重新選擇「整個螢幕」。")
+        return
+      }
+
+      const displaySurface = getDisplaySurface(videoTrack)
+      if (displaySurface !== REQUIRED_DISPLAY_SURFACE) {
+        stopMediaStream(stream)
+        setStatus("permission_required")
+        setError(displaySurface
+          ? "請選擇分享「整個螢幕」，不要選擇 Chrome 分頁或應用程式視窗。"
+          : "此瀏覽器無法確認你是否分享整個螢幕，請改用支援的 Chrome 或 Edge 後再開始。")
+        return
+      }
+
       streamRef.current = stream
       setCaptureVersion((version) => version + 1)
       setError(null)
       setStatus(token ? "connecting" : "permission_required")
-      stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+      videoTrack.addEventListener("ended", () => {
         streamRef.current = null
         setDesiredFps(1)
         setStatus("permission_required")
@@ -54,7 +78,7 @@ export function useTeamScreenStream(token: string | null) {
     } catch (captureError) {
       streamRef.current = null
       setStatus("permission_required")
-      setError(captureError instanceof Error ? captureError.message : "無法取得畫面直播權限。")
+      setError(screenCaptureErrorMessage(captureError))
     }
   }, [token])
 
@@ -169,6 +193,24 @@ export function useTeamScreenStream(token: string | null) {
 
 function supportsDisplayCapture() {
   return typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getDisplayMedia)
+}
+
+function getDisplaySurface(track: MediaStreamTrack): DisplaySurface | null {
+  const settings = track.getSettings() as MediaTrackSettings & { displaySurface?: DisplaySurface }
+  return settings.displaySurface ?? null
+}
+
+function stopMediaStream(stream: MediaStream) {
+  for (const track of stream.getTracks()) {
+    track.stop()
+  }
+}
+
+function screenCaptureErrorMessage(error: unknown) {
+  if (error instanceof DOMException && error.name === "NotAllowedError") {
+    return "你取消或拒絕了畫面直播。請重新開始，並在分享視窗中選擇「整個螢幕」。"
+  }
+  return error instanceof Error ? error.message : "無法取得畫面直播權限。"
 }
 
 function getStreamSessionId() {
