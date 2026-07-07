@@ -10,6 +10,7 @@ import {
   XIcon,
 } from "lucide-react"
 
+import { ConfirmAction } from "@/components/admin/AdminPrimitives"
 import { TurtlePreviewPanel } from "@/components/turtle"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -145,6 +146,21 @@ export default function AdminCommandCenterPage() {
     onError: (error) => setActionError(errorMessage(error)),
   })
 
+  const resetCurrentRound = useMutation({
+    mutationFn: adminApi.resetCurrentRound,
+    onSuccess: async (response) => {
+      queryClient.setQueryData(["game", "state", "admin"], response)
+      setActionError(null)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["game", "state", "admin"] }),
+        queryClient.invalidateQueries({ queryKey: ["leaderboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin", "blackboard", "control"] }),
+      ])
+    },
+    onError: (error) => setActionError(errorMessage(error)),
+  })
+
   const playSubmission = useMutation({
     mutationFn: (submissionId: string) => adminApi.playSubmissionOnBlackboard(submissionId),
     onSuccess: async () => {
@@ -255,6 +271,33 @@ export default function AdminCommandCenterPage() {
             }}
             onScore={() => scoreRound.mutate()}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="border-b">
+          <CardTitle>危險操作</CardTitle>
+          <CardDescription>重設會刪除目前回合的提交、投票、提名與回合計分，並清空黑板。</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm font-semibold text-muted-foreground">
+            {snapshot.state.phase === "idle" ? "目前沒有進行中的回合。" : "將遊戲重設為閒置狀態，讓主持人可以重新開始。"}
+          </div>
+          <ConfirmAction
+            title="重設遊戲為閒置？"
+            description="目前回合、提交、投票、提名與回合計分將被刪除，黑板會清空。此操作無法復原。"
+            confirmLabel="重設為閒置"
+            destructive
+            disabled={snapshot.state.phase === "idle" || resetCurrentRound.isPending}
+            onConfirm={async () => {
+              await resetCurrentRound.mutateAsync()
+            }}
+          >
+            <Button variant="destructive" disabled={snapshot.state.phase === "idle" || resetCurrentRound.isPending}>
+              {resetCurrentRound.isPending ? <Loader2Icon data-icon="inline-start" className="animate-spin" /> : <RefreshCwIcon data-icon="inline-start" />}
+              重設為閒置
+            </Button>
+          </ConfirmAction>
         </CardContent>
       </Card>
 

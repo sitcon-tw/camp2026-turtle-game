@@ -10,7 +10,7 @@ use backend::{
     config::Config,
     models::{CanvasConfig, Challenge, ChallengeSetStatus, GamePhase, Role, Team},
     router,
-    state::{AppState, NewChallenge},
+    state::{AppState, NewChallenge, ScoreEventListFilter},
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -151,6 +151,170 @@ async fn admin_controls_full_round_and_teams_vote_to_score() {
         leaderboard_body["teams"].as_array().expect("teams").len(),
         3
     );
+}
+
+#[tokio::test]
+async fn admin_can_reset_idle_game_without_error() {
+    let fixture = Fixture::new();
+    let app = router(fixture.state.clone());
+
+    let reset = json_request(
+        app,
+        Method::DELETE,
+        "/api/v1/admin/game/rounds/current",
+        Some(&fixture.admin_token),
+        json!({}),
+    )
+    .await;
+    assert_eq!(reset.status(), StatusCode::OK);
+    let body = response_json(reset).await;
+    assert_eq!(body["state"]["phase"], "idle");
+    assert!(body["state"]["current_round_id"].is_null());
+    assert!(body["state"]["current_challenge_id"].is_null());
+    assert!(body["round"].is_null());
+}
+
+#[tokio::test]
+async fn admin_reset_discards_current_round_and_scored_results() {
+    let fixture = Fixture::new();
+    let app = router(fixture.state.clone());
+
+    let start = json_request(
+        app.clone(),
+        Method::POST,
+        "/api/v1/admin/game/rounds",
+        Some(&fixture.admin_token),
+        json!({
+            "challenge_id": fixture.challenge.id,
+            "submission_seconds": 120,
+            "public_votes_per_team": 3
+        }),
+    )
+    .await;
+    assert_eq!(start.status(), StatusCode::CREATED);
+
+    let mut submission_ids = Vec::new();
+    for (index, team) in fixture.teams.iter().enumerate() {
+        let token = team_token(&fixture.state, team);
+        let response = json_request(
+            app.clone(),
+            Method::POST,
+            "/api/v1/game/rounds/current/submissions",
+            Some(&token),
+            json!({ "block_program": valid_program(index) }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = response_json(response).await;
+        submission_ids.push(
+            body["submission"]["id"]
+                .as_str()
+                .expect("submission id")
+                .to_owned(),
+        );
+    }
+
+    let phase = json_request(
+        app.clone(),
+        Method::POST,
+        "/api/v1/admin/game/phase",
+        Some(&fixture.admin_token),
+        json!({ "phase": GamePhase::TeamSelection }),
+    )
+    .await;
+    assert_eq!(phase.status(), StatusCode::OK);
+
+    for (index, team) in fixture.teams.iter().enumerate() {
+        let token = team_token(&fixture.state, team);
+        let response = json_request_with_device(
+            app.clone(),
+            Method::POST,
+            "/api/v1/game/rounds/current/team-selection-votes",
+            Some(&token),
+            Some(&format!("device-{index}")),
+            json!({ "submission_id": submission_ids[index] }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let phase = json_request(
+        app.clone(),
+        Method::POST,
+        "/api/v1/admin/game/phase",
+        Some(&fixture.admin_token),
+        json!({ "phase": GamePhase::PublicVoting }),
+    )
+    .await;
+    assert_eq!(phase.status(), StatusCode::OK);
+
+    let scored = json_request(
+        app.clone(),
+        Method::POST,
+        "/api/v1/admin/game/score",
+        Some(&fixture.admin_token),
+        json!({}),
+    )
+    .await;
+    assert_eq!(scored.status(), StatusCode::OK);
+    assert_eq!(
+        fixture
+            .state
+            .repository
+            .list_score_events(ScoreEventListFilter::default())
+            .expect("score events")
+            .len(),
+        3
+    );
+
+    let reset = json_request(
+        app.clone(),
+        Method::DELETE,
+        "/api/v1/admin/game/rounds/current",
+        Some(&fixture.admin_token),
+        json!({}),
+    )
+    .await;
+    assert_eq!(reset.status(), StatusCode::OK);
+    let reset_body = response_json(reset).await;
+    assert_eq!(reset_body["state"]["phase"], "idle");
+    assert!(reset_body["state"]["current_round_id"].is_null());
+    assert!(reset_body["state"]["current_challenge_id"].is_null());
+    assert!(reset_body["state"]["phase_ends_at"].is_null());
+    assert!(reset_body["round"].is_null());
+    assert_eq!(
+        reset_body["round_submissions"]
+            .as_array()
+            .expect("round submissions")
+            .len(),
+        0
+    );
+    assert_eq!(reset_body["results"].as_array().expect("results").len(), 0);
+
+    for submission_id in submission_ids {
+        let submission_id = uuid::Uuid::parse_str(&submission_id).expect("submission id parses");
+        let submission = fixture
+            .state
+            .repository
+            .get_submission(submission_id.into())
+            .expect("submission lookup");
+        assert!(submission.is_none());
+    }
+    assert!(
+        fixture
+            .state
+            .repository
+            .list_score_events(ScoreEventListFilter::default())
+            .expect("score events")
+            .is_empty()
+    );
+
+    let leaderboard = get_request(app, "/api/v1/leaderboard", None).await;
+    assert_eq!(leaderboard.status(), StatusCode::OK);
+    let leaderboard_body = response_json(leaderboard).await;
+    for team in leaderboard_body["teams"].as_array().expect("teams") {
+        assert_eq!(team["total_score"], 0);
+    }
 }
 
 #[tokio::test]

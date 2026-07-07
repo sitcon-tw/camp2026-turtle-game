@@ -608,6 +608,10 @@ pub trait Repository: Database {
     -> Result<Option<Submission>, StoreError>;
     fn list_submissions(&self, filter: SubmissionListFilter)
     -> Result<Vec<Submission>, StoreError>;
+    fn delete_submissions_and_score_events(
+        &self,
+        submission_ids: &[SubmissionId],
+    ) -> Result<(), StoreError>;
 
     fn append_score_event(&self, input: ScoreEventInput) -> Result<ScoreEvent, StoreError>;
     fn append_score_events_bulk(
@@ -681,6 +685,13 @@ pub struct StartRoundInput {
     pub submission_seconds: i64,
     pub public_votes_per_team: u8,
     pub created_by: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiscardedRound {
+    pub view: GameStateView,
+    pub round_id: Option<RoundId>,
+    pub submission_ids: Vec<SubmissionId>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -800,6 +811,72 @@ impl GameStore {
         let view = inner.view(now);
         self.persist_inner(&inner)?;
         Ok(view)
+    }
+
+    pub fn discard_current_round(
+        &self,
+        updated_by: Option<String>,
+    ) -> Result<DiscardedRound, GameError> {
+        let mut inner = self.write_inner()?;
+        let now = Utc::now();
+        let round_id = inner.current_round_id;
+        let submission_ids = round_id
+            .map(|round_id| {
+                inner
+                    .round_submissions
+                    .iter()
+                    .filter_map(|(submission_id, stored_round_id)| {
+                        (*stored_round_id == round_id).then_some(*submission_id)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        if let Some(round_id) = round_id {
+            inner.rounds.remove(&round_id);
+            inner
+                .round_submissions
+                .retain(|_, stored_round_id| *stored_round_id != round_id);
+            inner
+                .team_selection_votes
+                .retain(|_, vote| vote.round_id != round_id);
+            inner
+                .nominations
+                .retain(|_, nomination| nomination.round_id != round_id);
+            inner
+                .public_votes
+                .retain(|_, vote| vote.round_id != round_id);
+            inner.results.remove(&round_id);
+        }
+
+        let changed = round_id.is_some()
+            || inner.current_challenge_id.is_some()
+            || inner.phase != GamePhase::Idle
+            || inner.phase_ends_at.is_some();
+        if changed {
+            inner.current_round_id = None;
+            inner.current_challenge_id = None;
+            inner.phase = GamePhase::Idle;
+            inner.phase_started_at = now;
+            inner.phase_ends_at = None;
+            inner.rebuild_top_three_streaks();
+            inner.updated_at = now;
+            inner.updated_by = updated_by;
+            inner.version = inner.version.saturating_add(1);
+            let view = inner.view(now);
+            self.persist_inner(&inner)?;
+            return Ok(DiscardedRound {
+                view,
+                round_id,
+                submission_ids,
+            });
+        }
+
+        Ok(DiscardedRound {
+            view: inner.view(now),
+            round_id,
+            submission_ids,
+        })
     }
 
     pub fn update_timer(
@@ -1484,6 +1561,40 @@ impl GameInner {
         counts
     }
 
+    fn rebuild_top_three_streaks(&mut self) {
+        let mut scored_rounds: Vec<_> = self
+            .rounds
+            .values()
+            .filter(|round| self.results.contains_key(&round.id))
+            .collect();
+        scored_rounds.sort_by(|left, right| {
+            left.completed_at
+                .unwrap_or(left.started_at)
+                .cmp(&right.completed_at.unwrap_or(right.started_at))
+                .then(left.started_at.cmp(&right.started_at))
+                .then(left.id.cmp(&right.id))
+        });
+
+        let mut streaks = HashMap::new();
+        for round in scored_rounds {
+            let mut results = self.results.get(&round.id).cloned().unwrap_or_default();
+            results.sort_by(|left, right| left.rank.cmp(&right.rank));
+            for result in results {
+                if result.rank <= 3 {
+                    let streak = streaks
+                        .get(&result.team_id)
+                        .copied()
+                        .unwrap_or(0_u32)
+                        .saturating_add(1);
+                    streaks.insert(result.team_id, streak);
+                } else {
+                    streaks.insert(result.team_id, 0);
+                }
+            }
+        }
+        self.top_three_streaks = streaks;
+    }
+
     fn lock_nominations(&mut self, round_id: RoundId, now: DateTime<Utc>) {
         let mut by_team: HashMap<TeamId, HashMap<SubmissionId, usize>> = HashMap::new();
         for vote in self
@@ -1987,6 +2098,13 @@ impl Repository for InMemoryDatabase {
         filter: SubmissionListFilter,
     ) -> Result<Vec<Submission>, StoreError> {
         InMemoryDatabase::list_submissions(self, filter)
+    }
+
+    fn delete_submissions_and_score_events(
+        &self,
+        submission_ids: &[SubmissionId],
+    ) -> Result<(), StoreError> {
+        InMemoryDatabase::delete_submissions_and_score_events(self, submission_ids)
     }
 
     fn append_score_event(&self, input: ScoreEventInput) -> Result<ScoreEvent, StoreError> {
@@ -2816,6 +2934,56 @@ impl InMemoryDatabase {
                 .then(left.queue_order.cmp(&right.queue_order))
         });
         Ok(submissions)
+    }
+
+    pub fn delete_submissions_and_score_events(
+        &self,
+        submission_ids: &[SubmissionId],
+    ) -> Result<(), StoreError> {
+        let mut inner = self.write_inner()?;
+        let submission_ids: HashSet<_> = submission_ids.iter().copied().collect();
+        if submission_ids.is_empty() {
+            return Ok(());
+        }
+
+        let affected_team_ids: HashSet<_> = inner
+            .submissions
+            .values()
+            .filter_map(|submission| {
+                submission_ids
+                    .contains(&submission.id)
+                    .then_some(submission.team_id)
+            })
+            .collect();
+        inner
+            .submissions
+            .retain(|submission_id, _| !submission_ids.contains(submission_id));
+        inner.score_events.retain(|event| {
+            event
+                .refs
+                .submission_id
+                .is_none_or(|submission_id| !submission_ids.contains(&submission_id))
+        });
+
+        for team_id in affected_team_ids {
+            let latest_submission_at = inner
+                .submissions
+                .values()
+                .filter(|submission| submission.team_id == team_id)
+                .map(|submission| submission.created_at)
+                .max();
+            match latest_submission_at {
+                Some(submitted_at) => {
+                    inner.last_submission_at.insert(team_id, submitted_at);
+                }
+                None => {
+                    inner.last_submission_at.remove(&team_id);
+                }
+            }
+        }
+
+        self.persist_inner(&inner)?;
+        Ok(())
     }
 
     pub fn append_score_event(&self, input: ScoreEventInput) -> Result<ScoreEvent, StoreError> {

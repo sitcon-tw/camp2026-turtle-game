@@ -8,7 +8,7 @@ use axum::{
         Sse,
         sse::{Event, KeepAlive},
     },
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -52,6 +52,7 @@ pub fn router() -> Router<AppState> {
             post(record_public_vote),
         )
         .route("/admin/game/rounds", post(start_round))
+        .route("/admin/game/rounds/current", delete(reset_current_round))
         .route("/admin/game/timer", patch(update_timer))
         .route("/admin/game/phase", post(set_phase))
         .route("/admin/game/score", post(score_round))
@@ -174,6 +175,53 @@ async fn start_round(
         .snapshot(state.repository.as_ref(), None)
         .map_err(game_error)?;
     Ok((StatusCode::CREATED, Json(snapshot.into())))
+}
+
+async fn reset_current_round(
+    AdminUser(user): AdminUser,
+    State(state): State<AppState>,
+) -> Result<Json<GameStateResponse>, AppError> {
+    let discarded = state
+        .game
+        .discard_current_round(Some(user.subject))
+        .map_err(game_error)?;
+    if !discarded.submission_ids.is_empty() {
+        state
+            .repository
+            .delete_submissions_and_score_events(&discarded.submission_ids)?;
+        state.repository.recalculate_scores_from_events()?;
+    }
+
+    let display = state.blackboard.reset_display()?;
+    state.blackboard.clear_preview_runs()?;
+    state
+        .event_bus
+        .publish(AppEvent::BlackboardPlaybackChanged {
+            submission_id: None,
+        });
+    state
+        .event_bus
+        .publish(AppEvent::BlackboardPreviewPlaybackChanged {
+            preview_run_id: None,
+        });
+    if let Some(round_id) = discarded.round_id {
+        state
+            .event_bus
+            .publish(AppEvent::BlackboardPreviewRunsChanged { round_id });
+    }
+    state
+        .event_bus
+        .publish(AppEvent::BlackboardDisplayChanged { display });
+    state.event_bus.publish(AppEvent::LeaderboardUpdated);
+    publish_game(&state, discarded.view.version);
+
+    Ok(Json(
+        state
+            .game
+            .snapshot(state.repository.as_ref(), None)
+            .map_err(game_error)?
+            .into(),
+    ))
 }
 
 #[derive(Debug, Deserialize)]

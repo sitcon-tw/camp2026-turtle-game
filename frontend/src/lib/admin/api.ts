@@ -200,6 +200,9 @@ export const adminApi = {
       body: jsonBody(input),
     })
   },
+  resetCurrentRound() {
+    return request<GameStateResponse>("/api/v1/admin/game/rounds/current", { method: "DELETE" })
+  },
   updateGameTimer(input: { phase_ends_at?: string; add_seconds?: number }) {
     return request<GameStateResponse>("/api/v1/admin/game/timer", {
       method: "PATCH",
