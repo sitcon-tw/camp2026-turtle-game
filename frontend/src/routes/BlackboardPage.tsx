@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { ClockIcon, CrownIcon, RotateCcwIcon, ScreenShareIcon, TrophyIcon, WifiOffIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react"
+import { ClockIcon, CrownIcon, RotateCcwIcon, ScreenShareIcon, TrophyIcon, WifiOffIcon } from "lucide-react"
 
 import { ChallengeRenderer } from "@/components/turtle"
 import { Badge } from "@/components/ui/badge"
@@ -34,7 +34,6 @@ import { cn } from "@/lib/utils"
 const BOARD_ASPECT_RATIO = 16 / 9
 const STREAM_MIN_ZOOM = 1
 const STREAM_MAX_ZOOM = 4
-const STREAM_BUTTON_ZOOM_STEP = 0.25
 const STREAM_WHEEL_ZOOM_SENSITIVITY = 0.0012
 
 type StreamViewportTransform = {
@@ -274,12 +273,8 @@ const ZoomableStreamViewport = forwardRef<HTMLVideoElement, {
 videoRef,
 ) {
   const viewportRef = useRef<HTMLDivElement | null>(null)
-  const dragRef = useRef<{ pointerId: number; lastClientX: number; lastClientY: number } | null>(null)
   const [transform, setTransform] = useState<StreamViewportTransform>(STREAM_DEFAULT_TRANSFORM)
-  const [isDragging, setIsDragging] = useState(false)
-  const canZoomOut = transform.scale > STREAM_MIN_ZOOM + 0.01
-  const canZoomIn = transform.scale < STREAM_MAX_ZOOM - 0.01
-  const canReset = canZoomOut || Math.abs(transform.x) > 0.5 || Math.abs(transform.y) > 0.5
+  const canReset = transform.scale > STREAM_MIN_ZOOM + 0.01 || Math.abs(transform.x) > 0.5 || Math.abs(transform.y) > 0.5
 
   useEffect(() => {
     const element = viewportRef.current
@@ -298,7 +293,7 @@ videoRef,
           STREAM_MIN_ZOOM,
           STREAM_MAX_ZOOM,
         )
-        return zoomStreamTransformAt(current, nextScale, relativeX, relativeY, rect)
+        return positionStreamTransformForPointer({ ...current, scale: nextScale }, relativeX, relativeY, rect)
       })
     }
 
@@ -321,56 +316,15 @@ videoRef,
     }
   }, [])
 
-  function zoomBy(delta: number) {
-    const rect = viewportRef.current?.getBoundingClientRect()
-    if (!rect) return
-    setTransform((current) => {
-      const nextScale = clampNumber(current.scale + delta, STREAM_MIN_ZOOM, STREAM_MAX_ZOOM)
-      return zoomStreamTransformAt(current, nextScale, rect.width / 2, rect.height / 2, rect)
-    })
-  }
-
-  function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!isLive || transform.scale <= STREAM_MIN_ZOOM || event.button !== 0) return
-    event.preventDefault()
-    event.currentTarget.setPointerCapture(event.pointerId)
-    dragRef.current = {
-      pointerId: event.pointerId,
-      lastClientX: event.clientX,
-      lastClientY: event.clientY,
-    }
-    setIsDragging(true)
-  }
-
   function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
-    const drag = dragRef.current
     const rect = viewportRef.current?.getBoundingClientRect()
-    if (!drag || drag.pointerId !== event.pointerId || !rect) return
-    event.preventDefault()
-    const deltaX = event.clientX - drag.lastClientX
-    const deltaY = event.clientY - drag.lastClientY
-    drag.lastClientX = event.clientX
-    drag.lastClientY = event.clientY
-    setTransform((current) => constrainStreamTransform({
-      ...current,
-      x: current.x + deltaX,
-      y: current.y + deltaY,
-    }, rect))
-  }
-
-  function endDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    const drag = dragRef.current
-    if (!drag || drag.pointerId !== event.pointerId) return
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    dragRef.current = null
-    setIsDragging(false)
+    if (!isLive || !rect) return
+    const relativeX = event.clientX - rect.left
+    const relativeY = event.clientY - rect.top
+    setTransform((current) => positionStreamTransformForPointer(current, relativeX, relativeY, rect))
   }
 
   function resetTransform() {
-    dragRef.current = null
-    setIsDragging(false)
     setTransform(STREAM_DEFAULT_TRANSFORM)
   }
 
@@ -380,12 +334,8 @@ videoRef,
       className={cn(
         "absolute inset-0 overflow-hidden touch-none select-none",
         isLive ? "bg-background" : "pointer-events-none",
-        isLive && transform.scale > STREAM_MIN_ZOOM ? isDragging ? "cursor-grabbing" : "cursor-grab" : undefined,
       )}
-      onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
       onDoubleClick={resetTransform}
     >
       <div
@@ -415,22 +365,16 @@ videoRef,
           <Badge variant="outline" className="h-8 bg-background/80 font-mono font-black tabular-nums">
             {Math.round(transform.scale * 100)}%
           </Badge>
-          <StreamZoomButton label="Zoom out" disabled={!canZoomOut} onClick={() => zoomBy(-STREAM_BUTTON_ZOOM_STEP)}>
-            <ZoomOutIcon data-icon="inline-start" />
-          </StreamZoomButton>
-          <StreamZoomButton label="Zoom in" disabled={!canZoomIn} onClick={() => zoomBy(STREAM_BUTTON_ZOOM_STEP)}>
-            <ZoomInIcon data-icon="inline-start" />
-          </StreamZoomButton>
-          <StreamZoomButton label="Fit to screen" disabled={!canReset} onClick={resetTransform}>
+          <StreamResetButton label="Fit to screen" disabled={!canReset} onClick={resetTransform}>
             <RotateCcwIcon data-icon="inline-start" />
-          </StreamZoomButton>
+          </StreamResetButton>
         </div>
       ) : null}
     </div>
   )
 })
 
-function StreamZoomButton({
+function StreamResetButton({
   label,
   disabled,
   onClick,
@@ -456,25 +400,24 @@ function StreamZoomButton({
   )
 }
 
-function zoomStreamTransformAt(
+function positionStreamTransformForPointer(
   current: StreamViewportTransform,
-  nextScale: number,
   relativeX: number,
   relativeY: number,
   viewport: Pick<DOMRect, "width" | "height">,
 ) {
-  const scale = clampNumber(nextScale, STREAM_MIN_ZOOM, STREAM_MAX_ZOOM)
-  if (scale === current.scale) return constrainStreamTransform(current, viewport)
-  const centerX = viewport.width / 2
-  const centerY = viewport.height / 2
-  const pointX = (relativeX - centerX - current.x) / current.scale
-  const pointY = (relativeY - centerY - current.y) / current.scale
+  const scale = clampNumber(current.scale, STREAM_MIN_ZOOM, STREAM_MAX_ZOOM)
+  if (scale === STREAM_MIN_ZOOM) return STREAM_DEFAULT_TRANSFORM
+  const maxX = ((scale - STREAM_MIN_ZOOM) * viewport.width) / 2
+  const maxY = ((scale - STREAM_MIN_ZOOM) * viewport.height) / 2
+  const ratioX = clampNumber(relativeX / viewport.width, 0, 1)
+  const ratioY = clampNumber(relativeY / viewport.height, 0, 1)
 
-  return constrainStreamTransform({
+  return {
     scale,
-    x: relativeX - centerX - pointX * scale,
-    y: relativeY - centerY - pointY * scale,
-  }, viewport)
+    x: maxX * (1 - ratioX * 2),
+    y: maxY * (1 - ratioY * 2),
+  }
 }
 
 function constrainStreamTransform(
