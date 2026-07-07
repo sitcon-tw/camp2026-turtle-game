@@ -226,6 +226,7 @@ export const adminApi = {
     mode: BlackboardDisplayMode
     submission_id?: string | null
     stream_session_id?: string | null
+    preview_run_id?: string | null
   }) {
     return request<BlackboardControlState>("/api/v1/admin/blackboard/display", {
       method: "POST",

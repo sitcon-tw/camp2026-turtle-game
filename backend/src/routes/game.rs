@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::{AdminUser, AuthenticatedUser},
+    engine::{BlockProgram, EngineError},
     error::AppError,
     models::{
         Challenge, ChallengeId, GamePhase, GameStateView, PublicVote, PublicVoteChoice, Role,
@@ -37,6 +38,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/game/rounds/current/submissions",
             post(create_current_round_submission),
+        )
+        .route(
+            "/game/rounds/current/preview-runs",
+            post(record_current_round_preview_run),
         )
         .route(
             "/game/rounds/current/team-selection-votes",
@@ -153,6 +158,7 @@ async fn start_round(
         )
         .map_err(game_error)?;
     let display = state.blackboard.reset_display()?;
+    state.blackboard.clear_preview_runs()?;
     state
         .event_bus
         .publish(AppEvent::BlackboardPlaybackChanged {
@@ -249,6 +255,11 @@ struct SubmissionResponse {
     submission: Submission,
 }
 
+#[derive(Debug, Serialize)]
+struct PreviewRunResponse {
+    preview_run: crate::state::BlackboardPreviewRunView,
+}
+
 async fn create_current_round_submission(
     State(state): State<AppState>,
     user: AuthenticatedUser,
@@ -303,6 +314,72 @@ async fn create_current_round_submission(
         version: view.version,
     });
     Ok((StatusCode::CREATED, Json(SubmissionResponse { submission })))
+}
+
+async fn record_current_round_preview_run(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+    Json(payload): Json<SubmitRequest>,
+) -> Result<Json<PreviewRunResponse>, AppError> {
+    let team_id = require_enabled_team_user(&state, &user)?;
+    let session_id = session_id(&headers)?;
+    let device_id = device_id(&headers)?;
+    let snapshot = state
+        .game
+        .snapshot(state.repository.as_ref(), Some(team_id))
+        .map_err(game_error)?;
+    if snapshot.state.phase != GamePhase::SubmissionOpen {
+        return Err(AppError::bad_request(
+            "game phase does not allow preview runs",
+        ));
+    }
+    if snapshot
+        .state
+        .phase_ends_at
+        .is_some_and(|deadline| Utc::now() > deadline)
+    {
+        return Err(AppError::forbidden("submission deadline has passed"));
+    }
+    let round_id = snapshot
+        .state
+        .current_round_id
+        .ok_or_else(|| AppError::bad_request("no active round"))?;
+    let challenge_id = snapshot
+        .state
+        .current_challenge_id
+        .ok_or_else(|| AppError::bad_request("no active challenge"))?;
+    let block_program = validated_program_value(payload.block_program)?;
+    let preview_run = state.blackboard.record_preview_run(
+        round_id,
+        challenge_id,
+        team_id,
+        session_id,
+        device_id,
+        block_program,
+    )?;
+    state
+        .event_bus
+        .publish(AppEvent::BlackboardPreviewRunsChanged { round_id });
+    if let Some(selected_preview_run_id) = state.blackboard.display()?.selected_preview_run_id
+        && state
+            .blackboard
+            .preview_run(selected_preview_run_id, Some(round_id))?
+            .is_none()
+    {
+        state.blackboard.set_selected_preview_run_id(None)?;
+        state
+            .event_bus
+            .publish(AppEvent::BlackboardPreviewPlaybackChanged {
+                preview_run_id: None,
+            });
+        state
+            .event_bus
+            .publish(AppEvent::BlackboardDisplayChanged {
+                display: state.blackboard.display()?,
+            });
+    }
+    Ok(Json(PreviewRunResponse { preview_run }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -478,6 +555,38 @@ fn device_id(headers: &HeaderMap) -> Result<String, AppError> {
         return Err(AppError::bad_request("x-device-id header is required"));
     }
     Ok(value.to_owned())
+}
+
+fn session_id(headers: &HeaderMap) -> Result<String, AppError> {
+    let value = headers
+        .get("x-session-id")
+        .ok_or_else(|| AppError::bad_request("x-session-id header is required"))?;
+    let value = value
+        .to_str()
+        .map_err(|_| AppError::bad_request("x-session-id header is invalid"))?
+        .trim();
+    if value.is_empty() {
+        return Err(AppError::bad_request("x-session-id header is required"));
+    }
+    Ok(value.to_owned())
+}
+
+fn validated_program_value(value: Value) -> Result<Value, AppError> {
+    let program: BlockProgram = serde_json::from_value(value).map_err(|error| {
+        AppError::bad_request("block program is invalid")
+            .with_details(json!({ "reason": error.to_string() }))
+    })?;
+    program.validate().map_err(engine_app_error)?;
+    serde_json::to_value(program).map_err(|error| {
+        AppError::internal(format!(
+            "failed to serialize validated block program: {error}"
+        ))
+    })
+}
+
+fn engine_app_error(error: EngineError) -> AppError {
+    AppError::bad_request("block program is invalid")
+        .with_details(json!({ "reason": error.to_string() }))
 }
 
 fn normalize_public_choices(

@@ -5,6 +5,8 @@ import type { BlackboardState, BlackboardTeam, GameSubmission, GameSubmissionSta
 import {
   parseBlackboardEventData,
   playbackCueFromBlackboardEvent,
+  previewCueFromBlackboardEvent,
+  selectedPreviewRunForSubmissionOpen,
   selectedSubmissionForSubmissionOpen,
   submissionOpenCountItems,
 } from "./submission-open"
@@ -96,6 +98,57 @@ describe("submission-open blackboard helpers", () => {
     ).toBeNull()
     expect(selectedSubmissionForSubmissionOpen(blackboardState(submissions, "stale-submission"), null)).toBeNull()
   })
+
+  it("uses selected preview runs and lets preview clear cues win over stale state", () => {
+    const state = blackboardState([], null)
+    state.display.mode = "preview"
+    state.display.selected_preview_run_id = "preview-a"
+    state.preview_sessions = [
+      {
+        session_id: "session-a",
+        team_id: "team-a",
+        device_id: "device-a",
+        label: "Session 1",
+        latest_preview_at: "2026-07-04T00:00:02.000Z",
+        runs: [
+          previewRun({ id: "preview-a", session_id: "session-a", team_id: "team-a" }),
+          previewRun({ id: "preview-b", session_id: "session-a", team_id: "team-a" }),
+        ],
+      },
+    ]
+
+    expect(previewCueFromBlackboardEvent({ type: "blackboard_playback_changed", preview_run_id: "preview-a" }, 1000)).toBeNull()
+    expect(
+      previewCueFromBlackboardEvent(
+        parseBlackboardEventData(JSON.stringify({ type: "blackboard_preview_playback_changed", preview_run_id: "preview-b" })),
+        2000,
+      ),
+    ).toEqual({
+      previewRunId: "preview-b",
+      animationKey: "preview:preview-b:2000",
+    })
+    expect(selectedPreviewRunForSubmissionOpen(state, null)).toEqual({
+      previewRun: state.preview_sessions[0].runs[0],
+      animationKey: "blackboard-selected-preview:preview-a",
+    })
+    expect(
+      selectedPreviewRunForSubmissionOpen(state, {
+        previewRunId: "preview-b",
+        animationKey: "preview:preview-b:2001",
+      }),
+    ).toEqual({
+      previewRun: state.preview_sessions[0].runs[1],
+      animationKey: "preview:preview-b:2001",
+    })
+    expect(
+      selectedPreviewRunForSubmissionOpen(state, {
+        previewRunId: null,
+        animationKey: "preview:none:2002",
+      }),
+    ).toBeNull()
+    state.display.selected_preview_run_id = "stale-preview"
+    expect(selectedPreviewRunForSubmissionOpen(state, null)).toBeNull()
+  })
 })
 
 function submission(input: {
@@ -127,6 +180,23 @@ function submission(input: {
   }
 }
 
+function previewRun(input: {
+  id: string
+  session_id: string
+  team_id: string
+}) {
+  return {
+    id: input.id,
+    round_id: "round-a",
+    challenge_id: "challenge-a",
+    team_id: input.team_id,
+    session_id: input.session_id,
+    device_id: "device-a",
+    block_program: {},
+    created_at: "2026-07-04T00:00:02.000Z",
+  }
+}
+
 function blackboardState(roundSubmissions: GameSubmission[], selectedSubmissionId: string | null): BlackboardState {
   return {
     status: "idle",
@@ -134,6 +204,7 @@ function blackboardState(roundSubmissions: GameSubmission[], selectedSubmissionI
       mode: "submission",
       selected_submission_id: selectedSubmissionId,
       selected_stream_session_id: null,
+      selected_preview_run_id: null,
     },
     selected_submission_id: selectedSubmissionId,
     game: {
@@ -162,6 +233,7 @@ function blackboardState(roundSubmissions: GameSubmission[], selectedSubmissionI
     },
     teams,
     stream_sessions: [],
+    preview_sessions: [],
     leaderboard: [],
   }
 }

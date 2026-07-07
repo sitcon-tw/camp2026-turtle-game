@@ -13,11 +13,14 @@ import { adminApi, errorMessage } from "@/lib/admin/api"
 import {
   parseBlackboardEventData,
   playbackCueFromBlackboardEvent,
+  previewCueFromBlackboardEvent,
+  selectedPreviewRunForSubmissionOpen,
   selectedSubmissionForSubmissionOpen,
   submissionOpenCountItems,
 } from "@/lib/blackboard/submission-open"
-import type { BlackboardReplay, TeamSubmissionCount } from "@/lib/blackboard/submission-open"
+import type { BlackboardPreviewReplay, BlackboardReplay, TeamSubmissionCount } from "@/lib/blackboard/submission-open"
 import type {
+  BlackboardPreviewRun,
   BlackboardState,
   BlackboardTeam,
   GameChallenge,
@@ -43,6 +46,7 @@ type TeamArtwork = {
 export default function BlackboardPage() {
   const queryClient = useQueryClient()
   const [playbackCue, setPlaybackCue] = useState<BlackboardReplay | null>(null)
+  const [previewCue, setPreviewCue] = useState<BlackboardPreviewReplay | null>(null)
   const blackboard = useQuery({
     queryKey: ["public", "blackboard"],
     queryFn: adminApi.blackboard,
@@ -52,8 +56,11 @@ export default function BlackboardPage() {
   useEffect(() => {
     const events = new EventSource("/api/v1/blackboard/events")
     events.addEventListener("message", (message) => {
-      const playback = playbackCueFromBlackboardEvent(parseBlackboardEventData(message.data))
+      const event = parseBlackboardEventData(message.data)
+      const playback = playbackCueFromBlackboardEvent(event)
       if (playback) setPlaybackCue(playback)
+      const preview = previewCueFromBlackboardEvent(event)
+      if (preview) setPreviewCue(preview)
       void queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] })
     })
     return () => {
@@ -91,21 +98,37 @@ export default function BlackboardPage() {
 
   return (
     <main className="relative h-svh overflow-hidden bg-background p-3 lg:p-4">
-      <PhaseView data={blackboard.data} playbackCue={playbackCue} />
+      <PhaseView data={blackboard.data} playbackCue={playbackCue} previewCue={previewCue} />
       <TimerBlock snapshot={blackboard.data.game} />
     </main>
   )
 }
 
-function PhaseView({ data, playbackCue }: { data: BlackboardState; playbackCue: BlackboardReplay | null }) {
-  if (data.game.state.phase === "submission_open") return <SubmissionOpenView data={data} playbackCue={playbackCue} />
+function PhaseView({
+  data,
+  playbackCue,
+  previewCue,
+}: {
+  data: BlackboardState
+  playbackCue: BlackboardReplay | null
+  previewCue: BlackboardPreviewReplay | null
+}) {
+  if (data.game.state.phase === "submission_open") return <SubmissionOpenView data={data} playbackCue={playbackCue} previewCue={previewCue} />
   if (data.game.state.phase === "team_selection") return <TeamSelectionView data={data} />
   if (data.game.state.phase === "public_voting") return <PublicVotingView data={data} />
   if (data.game.state.phase === "round_complete" || data.game.state.phase === "scoring") return <RoundCompleteView data={data} />
   return <IdleView data={data} />
 }
 
-function SubmissionOpenView({ data, playbackCue }: { data: BlackboardState; playbackCue: BlackboardReplay | null }) {
+function SubmissionOpenView({
+  data,
+  playbackCue,
+  previewCue,
+}: {
+  data: BlackboardState
+  playbackCue: BlackboardReplay | null
+  previewCue: BlackboardPreviewReplay | null
+}) {
   const teams = useEnabledTeams(data)
   const items = useMemo(
     () => submissionOpenCountItems(teams, data.game.round_submissions),
@@ -120,6 +143,13 @@ function SubmissionOpenView({ data, playbackCue }: { data: BlackboardState; play
     return <StreamSpotlightView data={data} session={session} />
   }
 
+  if (data.display.mode === "preview") {
+    const selectedPreview = selectedPreviewRunForSubmissionOpen(data, previewCue)
+    if (selectedPreview) {
+      return <PreviewSpotlightView data={data} previewRun={selectedPreview.previewRun} animationKey={selectedPreview.animationKey} />
+    }
+  }
+
   if (selectedPlayback) {
     return <ReplaySpotlightView data={data} submission={selectedPlayback.submission} animationKey={selectedPlayback.animationKey} />
   }
@@ -130,6 +160,50 @@ function SubmissionOpenView({ data, playbackCue }: { data: BlackboardState; play
       subtitle={data.game.challenge ? `${data.game.challenge.title} / Submission Open` : "Submission Open"}
     >
       <SubmissionCountGrid items={items} />
+    </BoardShell>
+  )
+}
+
+function PreviewSpotlightView({
+  data,
+  previewRun,
+  animationKey,
+}: {
+  data: BlackboardState
+  previewRun: BlackboardPreviewRun
+  animationKey: string
+}) {
+  const team = data.teams.find((item) => item.id === previewRun.team_id)
+  const session = data.preview_sessions.find((item) => item.session_id === previewRun.session_id)
+  const replayTitle = `${team?.name ?? `Team ${previewRun.team_id.slice(0, 6)}`} / ${session?.label ?? "Preview"}`
+
+  return (
+    <BoardShell
+      title={replayTitle}
+      subtitle={data.game.challenge?.title ?? "Submission Open"}
+    >
+      <div className="grid h-full min-h-0 gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.45fr)]">
+        <section className="animate-in fade-in zoom-in-95 min-h-0 overflow-hidden rounded-[1rem] border-2 border-ink bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.22),transparent_36%),hsl(var(--surface-raised))] duration-500 shadow-[4px_4px_0_rgba(23,35,58,0.14)]">
+          <PreviewArtwork
+            previewRun={previewRun}
+            challenge={data.game.challenge}
+            aspectRatio={challengeAspectRatio(data.game.challenge)}
+            animationKey={animationKey}
+          />
+        </section>
+        <aside className="animate-in fade-in slide-in-from-right-4 grid min-h-0 content-between gap-3 rounded-[1rem] border-2 border-ink bg-card/95 p-4 duration-500 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
+          <div className="min-w-0">
+            <div className="text-sm font-black uppercase tracking-[0.22em] text-muted-foreground">Now previewing</div>
+            <div className="mt-2 truncate text-4xl font-black lg:text-5xl">{team?.name ?? `Team ${previewRun.team_id.slice(0, 6)}`}</div>
+            <div className="mt-2 text-xl font-semibold text-muted-foreground">{session?.label ?? "Preview session"}</div>
+          </div>
+          <div className="grid gap-2">
+            <ReplayMetric label="Mode" value="Preview" />
+            <ReplayMetric label="Run" value={`#${previewRun.id.slice(0, 6)}`} />
+            <ReplayMetric label="Previewed" value={formatClock(previewRun.created_at)} />
+          </div>
+        </aside>
+      </div>
     </BoardShell>
   )
 }
@@ -666,6 +740,38 @@ function SubmissionArtwork({
           animationKey={animationKey ?? submission.id}
           showTarget={false}
           showTurtle={animated}
+          className="h-full w-full"
+          canvasClassName="h-full w-full"
+        />
+      </div>
+    </div>
+  )
+}
+
+function PreviewArtwork({
+  previewRun,
+  challenge,
+  aspectRatio,
+  animationKey,
+}: {
+  previewRun: BlackboardPreviewRun
+  challenge: GameChallenge | null
+  aspectRatio: number
+  animationKey?: string | number
+}) {
+  return (
+    <div className="flex h-full min-h-0 w-full items-center justify-center overflow-hidden p-2" style={{ containerType: "size" }}>
+      <div
+        className="overflow-hidden rounded-[1rem] border-2 border-ink bg-background shadow-[2px_2px_0_rgba(23,35,58,0.1)]"
+        style={canvasFrameStyle(aspectRatio)}
+      >
+        <ChallengeRenderer
+          challenge={challenge}
+          program={previewRun.block_program}
+          animated
+          animationKey={animationKey ?? previewRun.id}
+          showTarget={false}
+          showTurtle
           className="h-full w-full"
           canvasClassName="h-full w-full"
         />

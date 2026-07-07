@@ -43,6 +43,7 @@ uuid_id!(TeamId);
 uuid_id!(ChallengeSetId);
 uuid_id!(ChallengeId);
 uuid_id!(SubmissionId);
+uuid_id!(PreviewRunId);
 uuid_id!(ScoreEventId);
 uuid_id!(RoundId);
 

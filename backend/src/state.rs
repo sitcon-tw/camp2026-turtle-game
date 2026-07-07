@@ -16,15 +16,17 @@ use crate::{
     engine::TraceStep,
     models::{
         CanvasConfig, Challenge, ChallengeId, ChallengeProgressStatus, ChallengeSet,
-        ChallengeSetId, ChallengeSetStatus, GamePhase, GameStateView, PublicVote, PublicVoteChoice,
-        Round, RoundId, RoundResultEntry, ScoreEvent, ScoreEventId, ScoreEventRefs, ScoreEventType,
-        Submission, SubmissionId, SubmissionStatus, Team, TeamId, TeamNomination,
+        ChallengeSetId, ChallengeSetStatus, GamePhase, GameStateView, PreviewRunId, PublicVote,
+        PublicVoteChoice, Round, RoundId, RoundResultEntry, ScoreEvent, ScoreEventId,
+        ScoreEventRefs, ScoreEventType, Submission, SubmissionId, SubmissionStatus, Team, TeamId,
+        TeamNomination,
         TeamSelectionVote, Timestamp,
     },
 };
 
 const EVENT_BUS_CAPACITY: usize = 256;
 const SUBMISSION_RATE_LIMIT_SECONDS: i64 = 3;
+const PREVIEW_RUNS_PER_SESSION: usize = 5;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -292,6 +294,12 @@ pub enum AppEvent {
     BlackboardPlaybackChanged {
         submission_id: Option<SubmissionId>,
     },
+    BlackboardPreviewPlaybackChanged {
+        preview_run_id: Option<PreviewRunId>,
+    },
+    BlackboardPreviewRunsChanged {
+        round_id: RoundId,
+    },
     BlackboardDisplayChanged {
         display: BlackboardDisplay,
     },
@@ -337,6 +345,7 @@ pub enum AppEvent {
 pub enum BlackboardDisplayMode {
     Submission,
     Stream,
+    Preview,
 }
 
 impl Default for BlackboardDisplayMode {
@@ -350,6 +359,7 @@ pub struct BlackboardDisplay {
     pub mode: BlackboardDisplayMode,
     pub selected_submission_id: Option<SubmissionId>,
     pub selected_stream_session_id: Option<String>,
+    pub selected_preview_run_id: Option<PreviewRunId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -360,6 +370,28 @@ pub struct BlackboardStreamSessionView {
     pub label: String,
     pub connected: bool,
     pub last_seen_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BlackboardPreviewRunView {
+    pub id: PreviewRunId,
+    pub round_id: RoundId,
+    pub challenge_id: ChallengeId,
+    pub team_id: TeamId,
+    pub session_id: String,
+    pub device_id: String,
+    pub block_program: Value,
+    pub created_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BlackboardPreviewSessionView {
+    pub session_id: String,
+    pub team_id: TeamId,
+    pub device_id: String,
+    pub label: String,
+    pub latest_preview_at: Timestamp,
+    pub runs: Vec<BlackboardPreviewRunView>,
 }
 
 #[derive(Debug, Clone)]
@@ -373,10 +405,32 @@ struct BlackboardStreamSession {
     last_seen_at: Timestamp,
 }
 
+#[derive(Debug, Clone)]
+struct BlackboardPreviewRun {
+    id: PreviewRunId,
+    round_id: RoundId,
+    challenge_id: ChallengeId,
+    team_id: TeamId,
+    session_id: String,
+    device_id: String,
+    block_program: Value,
+    created_at: Timestamp,
+}
+
+#[derive(Debug, Clone)]
+struct BlackboardPreviewSession {
+    session_id: String,
+    team_id: TeamId,
+    device_id: String,
+    label: String,
+    runs: Vec<BlackboardPreviewRun>,
+}
+
 #[derive(Clone, Default)]
 pub struct BlackboardStore {
     display: Arc<RwLock<BlackboardDisplay>>,
     stream_sessions: Arc<RwLock<HashMap<String, BlackboardStreamSession>>>,
+    preview_sessions: Arc<RwLock<HashMap<String, BlackboardPreviewSession>>>,
     invalidated_stream_session_ids: Arc<RwLock<HashSet<String>>>,
 }
 
@@ -419,6 +473,7 @@ impl BlackboardStore {
         display.mode = BlackboardDisplayMode::Submission;
         display.selected_submission_id = submission_id;
         display.selected_stream_session_id = None;
+        display.selected_preview_run_id = None;
         Ok(display.selected_submission_id)
     }
 
@@ -545,6 +600,141 @@ impl BlackboardStore {
         Ok(views)
     }
 
+    pub fn record_preview_run(
+        &self,
+        round_id: RoundId,
+        challenge_id: ChallengeId,
+        team_id: TeamId,
+        session_id: String,
+        device_id: String,
+        block_program: Value,
+    ) -> Result<BlackboardPreviewRunView, StoreError> {
+        let now = Utc::now();
+        let mut sessions = self
+            .preview_sessions
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        let label = sessions
+            .get(&session_id)
+            .map(|session| session.label.clone())
+            .unwrap_or_else(|| {
+                let team_session_count = sessions
+                    .values()
+                    .filter(|session| session.team_id == team_id)
+                    .count()
+                    .saturating_add(1);
+                format!("Session {team_session_count}")
+            });
+        let run = BlackboardPreviewRun {
+            id: PreviewRunId::new(),
+            round_id,
+            challenge_id,
+            team_id,
+            session_id: session_id.clone(),
+            device_id: device_id.clone(),
+            block_program,
+            created_at: now,
+        };
+        let session =
+            sessions
+                .entry(session_id.clone())
+                .or_insert_with(|| BlackboardPreviewSession {
+                    session_id,
+                    team_id,
+                    device_id: device_id.clone(),
+                    label,
+                    runs: Vec::new(),
+                });
+        session.team_id = team_id;
+        session.device_id = device_id;
+        session.runs.retain(|existing| existing.round_id == round_id);
+        session.runs.insert(0, run);
+        session.runs.truncate(PREVIEW_RUNS_PER_SESSION);
+        let view = self.preview_run_view(
+            session
+                .runs
+                .first()
+                .expect("preview run was just inserted"),
+        );
+        Ok(view)
+    }
+
+    pub fn preview_sessions(
+        &self,
+        current_round_id: Option<RoundId>,
+    ) -> Result<Vec<BlackboardPreviewSessionView>, StoreError> {
+        let sessions = self
+            .preview_sessions
+            .read()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        let mut views: Vec<_> = sessions
+            .values()
+            .filter_map(|session| self.preview_session_view(session, current_round_id))
+            .collect();
+        views.sort_by(|left, right| {
+            left.team_id
+                .cmp(&right.team_id)
+                .then_with(|| left.label.cmp(&right.label))
+                .then_with(|| left.session_id.cmp(&right.session_id))
+        });
+        Ok(views)
+    }
+
+    pub fn preview_run(
+        &self,
+        preview_run_id: PreviewRunId,
+        current_round_id: Option<RoundId>,
+    ) -> Result<Option<BlackboardPreviewRunView>, StoreError> {
+        let sessions = self
+            .preview_sessions
+            .read()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        Ok(sessions.values().find_map(|session| {
+            session
+                .runs
+                .iter()
+                .find(|run| {
+                    run.id == preview_run_id
+                        && current_round_id.is_none_or(|round_id| run.round_id == round_id)
+                })
+                .map(|run| self.preview_run_view(run))
+        }))
+    }
+
+    pub fn set_selected_preview_run_id(
+        &self,
+        preview_run_id: Option<PreviewRunId>,
+    ) -> Result<Option<PreviewRunId>, StoreError> {
+        let mut display = self
+            .display
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        display.mode = if preview_run_id.is_some() {
+            BlackboardDisplayMode::Preview
+        } else {
+            BlackboardDisplayMode::Submission
+        };
+        display.selected_submission_id = None;
+        display.selected_stream_session_id = None;
+        display.selected_preview_run_id = preview_run_id;
+        Ok(display.selected_preview_run_id)
+    }
+
+    pub fn clear_preview_runs(&self) -> Result<(), StoreError> {
+        self.preview_sessions
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?
+            .clear();
+        let mut display = self
+            .display
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        if display.mode == BlackboardDisplayMode::Preview {
+            *display = BlackboardDisplay::default();
+        }
+        Ok(())
+    }
+
     pub fn stream_session(
         &self,
         session_id: &str,
@@ -592,6 +782,11 @@ impl BlackboardStore {
             }
         }
 
+        self.preview_sessions
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?
+            .retain(|_, session| session.team_id != team_id);
+
         Ok(removed_session_ids)
     }
 
@@ -603,6 +798,41 @@ impl BlackboardStore {
             label: session.label.clone(),
             connected: session.connected,
             last_seen_at: session.last_seen_at,
+        }
+    }
+
+    fn preview_session_view(
+        &self,
+        session: &BlackboardPreviewSession,
+        current_round_id: Option<RoundId>,
+    ) -> Option<BlackboardPreviewSessionView> {
+        let runs: Vec<_> = session
+            .runs
+            .iter()
+            .filter(|run| current_round_id.is_none_or(|round_id| run.round_id == round_id))
+            .map(|run| self.preview_run_view(run))
+            .collect();
+        let latest_preview_at = runs.first()?.created_at;
+        Some(BlackboardPreviewSessionView {
+            session_id: session.session_id.clone(),
+            team_id: session.team_id,
+            device_id: session.device_id.clone(),
+            label: session.label.clone(),
+            latest_preview_at,
+            runs,
+        })
+    }
+
+    fn preview_run_view(&self, run: &BlackboardPreviewRun) -> BlackboardPreviewRunView {
+        BlackboardPreviewRunView {
+            id: run.id,
+            round_id: run.round_id,
+            challenge_id: run.challenge_id,
+            team_id: run.team_id,
+            session_id: run.session_id.clone(),
+            device_id: run.device_id.clone(),
+            block_program: run.block_program.clone(),
+            created_at: run.created_at,
         }
     }
 }
