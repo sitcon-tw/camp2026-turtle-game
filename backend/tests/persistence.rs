@@ -193,7 +193,8 @@ async fn file_persistence_survives_app_state_restart_through_http_api() {
     .await;
     assert_eq!(asset.status(), StatusCode::OK);
     assert_eq!(
-        asset.headers()
+        asset
+            .headers()
             .get(header::CONTENT_TYPE)
             .expect("asset content type"),
         "image/png"
@@ -235,10 +236,8 @@ struct TempDataDir {
 impl TempDataDir {
     fn new() -> Self {
         Self {
-            path: std::env::temp_dir().join(format!(
-                "turtle-game-persistence-{}",
-                uuid::Uuid::new_v4()
-            )),
+            path: std::env::temp_dir()
+                .join(format!("turtle-game-persistence-{}", uuid::Uuid::new_v4())),
         }
     }
 }

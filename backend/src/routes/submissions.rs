@@ -165,11 +165,9 @@ async fn play_submission_on_blackboard(
         .publish(AppEvent::BlackboardPlaybackChanged {
             submission_id: Some(submission_id),
         });
-    state
-        .event_bus
-        .publish(AppEvent::BlackboardDisplayChanged {
-            display: state.blackboard.display()?,
-        });
+    state.event_bus.publish(AppEvent::BlackboardDisplayChanged {
+        display: state.blackboard.display()?,
+    });
     Ok(Json(BlackboardPlaybackResponse {
         played: true,
         submission_id,

@@ -60,6 +60,7 @@ export type Round = {
   id: string
   challenge_id: string
   started_at: Timestamp
+  submission_seconds: number
   submission_ends_at: Timestamp
   team_selection_ends_at: Timestamp | null
   public_voting_ends_at: Timestamp | null

@@ -105,9 +105,7 @@ async fn retry_submission(
         Some(original.id),
     )?;
     let retry = judge_and_store_submission(&state, retry).await?;
-    Ok(Json(RetryResponse {
-        submission: retry,
-    }))
+    Ok(Json(RetryResponse { submission: retry }))
 }
 
 #[derive(Debug, Serialize)]

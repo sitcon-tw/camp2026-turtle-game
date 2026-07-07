@@ -7,8 +7,6 @@ const API_ORIGIN = process.env.API_ORIGIN ?? "http://127.0.0.1:3000"
 const API_BASE = `${API_ORIGIN}/api/v1`
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? envFile.ADMIN_PASSWORD ?? "admin-password"
 const SUBMISSION_SECONDS = Number(process.env.SUBMISSION_SECONDS ?? 20)
-const TEAM_SELECTION_SECONDS = Number(process.env.TEAM_SELECTION_SECONDS ?? 14)
-const PUBLIC_VOTING_SECONDS = Number(process.env.PUBLIC_VOTING_SECONDS ?? 14)
 
 const runId = Date.now().toString(36).toUpperCase().slice(-6)
 const canvas = { width: 640, height: 480, background_color: "#ffffff" }
@@ -69,14 +67,12 @@ async function main() {
   }
 
   await adminRequest(adminToken, "/admin/game/phase", { method: "POST", body: { phase: "team_selection" } })
-  await adminRequest(adminToken, "/admin/game/timer", { method: "PATCH", body: { add_seconds: TEAM_SELECTION_SECONDS } })
-  log(`Team Selection started: ${TEAM_SELECTION_SECONDS}s`)
+  log("Team Selection started")
   await runTeamSelectionPhase(teamLogins, submissionsByTeam)
   await sleep(2_500)
 
   await adminRequest(adminToken, "/admin/game/phase", { method: "POST", body: { phase: "public_voting" } })
-  await adminRequest(adminToken, "/admin/game/timer", { method: "PATCH", body: { add_seconds: PUBLIC_VOTING_SECONDS } })
-  log(`Public Voting started: ${PUBLIC_VOTING_SECONDS}s`)
+  log("Public Voting started")
   await runPublicVotingPhase(teamLogins, submissionsByTeam)
   await sleep(4_000)
 

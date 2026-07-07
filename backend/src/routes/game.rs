@@ -421,11 +421,9 @@ async fn record_current_round_preview_run(
             .publish(AppEvent::BlackboardPreviewPlaybackChanged {
                 preview_run_id: None,
             });
-        state
-            .event_bus
-            .publish(AppEvent::BlackboardDisplayChanged {
-                display: state.blackboard.display()?,
-            });
+        state.event_bus.publish(AppEvent::BlackboardDisplayChanged {
+            display: state.blackboard.display()?,
+        });
     }
     Ok(Json(PreviewRunResponse { preview_run }))
 }

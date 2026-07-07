@@ -26,6 +26,8 @@ use crate::{
 const EVENT_BUS_CAPACITY: usize = 256;
 const SUBMISSION_RATE_LIMIT_SECONDS: i64 = 3;
 const PREVIEW_RUNS_PER_SESSION: usize = 5;
+const DEFAULT_TEAM_SELECTION_SECONDS: i64 = 180;
+const DEFAULT_PUBLIC_VOTING_SECONDS: i64 = 60;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -793,6 +795,7 @@ impl GameStore {
             id: RoundId::new(),
             challenge_id: input.challenge_id,
             started_at: now,
+            submission_seconds: input.submission_seconds.max(1),
             submission_ends_at: now + Duration::seconds(input.submission_seconds.max(1)),
             team_selection_ends_at: None,
             public_voting_ends_at: None,
@@ -1284,16 +1287,14 @@ impl GameStore {
             inner.lock_nominations(round_id, now);
         }
         let ends_at = match phase {
-            GamePhase::TeamSelection => Some(now + Duration::seconds(inner.team_selection_seconds)),
-            GamePhase::SubmissionOpen => inner.rounds.get(&round_id).map(|round| {
-                if round.submission_ends_at > now {
-                    return round.submission_ends_at;
-                }
-                let submission_duration =
-                    (round.submission_ends_at - round.started_at).max(Duration::seconds(1));
-                now + submission_duration
-            }),
-            GamePhase::PublicVoting => Some(now + Duration::seconds(60)),
+            GamePhase::SubmissionOpen => inner
+                .rounds
+                .get(&round_id)
+                .map(|round| now + Duration::seconds(round.submission_seconds.max(1))),
+            GamePhase::TeamSelection => {
+                Some(now + Duration::seconds(inner.team_selection_seconds.max(1)))
+            }
+            GamePhase::PublicVoting => Some(now + Duration::seconds(DEFAULT_PUBLIC_VOTING_SECONDS)),
             GamePhase::Scoring | GamePhase::RoundComplete | GamePhase::Idle => None,
         };
         if let Some(round) = inner.rounds.get_mut(&round_id) {
@@ -1460,7 +1461,7 @@ impl Default for GameInner {
             phase_started_at: now,
             phase_ends_at: None,
             public_votes_per_team: 3,
-            team_selection_seconds: 180,
+            team_selection_seconds: DEFAULT_TEAM_SELECTION_SECONDS,
             updated_at: now,
             updated_by: None,
             rounds: HashMap::new(),
@@ -3924,6 +3925,54 @@ mod tests {
             .expect("phase should advance");
         assert_eq!(advanced.phase, GamePhase::TeamSelection);
         assert_eq!(advanced.updated_by.as_deref(), Some("system:auto-advance"));
+    }
+
+    #[test]
+    fn game_store_manual_phase_change_resets_deadline_from_phase_defaults() {
+        let store = InMemoryDatabase::default();
+        let game = GameStore::default();
+        let (_team, challenge) = team_and_challenge(&store);
+        game.start_round(
+            &store,
+            StartRoundInput {
+                challenge_id: challenge.id,
+                submission_seconds: 60,
+                public_votes_per_team: 3,
+                created_by: None,
+            },
+        )
+        .expect("round should start");
+
+        let extended_deadline = Utc::now() + Duration::seconds(3_600);
+        game.update_timer(extended_deadline, None)
+            .expect("timer should update");
+
+        let team_selection = game
+            .set_phase(GamePhase::TeamSelection, Some("admin".to_owned()))
+            .expect("team selection should start");
+        assert_eq!(
+            team_selection.phase_ends_at,
+            Some(
+                team_selection.phase_started_at + Duration::seconds(DEFAULT_TEAM_SELECTION_SECONDS)
+            )
+        );
+
+        let public_voting = game
+            .set_phase(GamePhase::PublicVoting, Some("admin".to_owned()))
+            .expect("public voting should start");
+        assert_eq!(
+            public_voting.phase_ends_at,
+            Some(public_voting.phase_started_at + Duration::seconds(DEFAULT_PUBLIC_VOTING_SECONDS))
+        );
+
+        let submission = game
+            .set_phase(GamePhase::SubmissionOpen, Some("admin".to_owned()))
+            .expect("submissions should reopen");
+        assert_eq!(
+            submission.phase_ends_at,
+            Some(submission.phase_started_at + Duration::seconds(60))
+        );
+        assert!(submission.phase_ends_at.expect("deadline") < extended_deadline);
     }
 
     #[test]

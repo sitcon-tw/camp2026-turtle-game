@@ -124,10 +124,16 @@ pub struct Round {
     pub id: RoundId,
     pub challenge_id: ChallengeId,
     pub started_at: Timestamp,
+    #[serde(default = "default_submission_seconds")]
+    pub submission_seconds: i64,
     pub submission_ends_at: Timestamp,
     pub team_selection_ends_at: Option<Timestamp>,
     pub public_voting_ends_at: Option<Timestamp>,
     pub completed_at: Option<Timestamp>,
+}
+
+const fn default_submission_seconds() -> i64 {
+    600
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

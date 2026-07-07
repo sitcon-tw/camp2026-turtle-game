@@ -39,7 +39,9 @@ impl Config {
                 return Err(ConfigError::NonUnicode("TOKEN_TTL_SECONDS"));
             }
         };
-        let data_dir = optional_env("DATA_DIR")?.map(PathBuf::from).or(default.data_dir);
+        let data_dir = optional_env("DATA_DIR")?
+            .map(PathBuf::from)
+            .or(default.data_dir);
 
         Ok(Self {
             bind_addr,
