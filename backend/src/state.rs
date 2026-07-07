@@ -1239,14 +1239,23 @@ impl GameStore {
         }
         let ends_at = match phase {
             GamePhase::TeamSelection => Some(now + Duration::seconds(inner.team_selection_seconds)),
-            GamePhase::SubmissionOpen => inner
-                .rounds
-                .get(&round_id)
-                .map(|round| round.submission_ends_at),
+            GamePhase::SubmissionOpen => inner.rounds.get(&round_id).map(|round| {
+                if round.submission_ends_at > now {
+                    return round.submission_ends_at;
+                }
+                let submission_duration =
+                    (round.submission_ends_at - round.started_at).max(Duration::seconds(1));
+                now + submission_duration
+            }),
             GamePhase::PublicVoting => Some(now + Duration::seconds(60)),
             GamePhase::Scoring | GamePhase::RoundComplete | GamePhase::Idle => None,
         };
         if let Some(round) = inner.rounds.get_mut(&round_id) {
+            if phase == GamePhase::SubmissionOpen
+                && let Some(ends_at) = ends_at
+            {
+                round.submission_ends_at = ends_at;
+            }
             if phase == GamePhase::TeamSelection {
                 round.team_selection_ends_at = ends_at;
             }
