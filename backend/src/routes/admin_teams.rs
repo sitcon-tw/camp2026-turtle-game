@@ -195,11 +195,10 @@ async fn delete_team(
                 version: view.version,
             });
     }
-    let removed_stream_session_ids = state
+    let mut blackboard_display_changed = state
         .blackboard
-        .remove_team_sessions(deletion.team.id)
+        .remove_team_preview_sessions(deletion.team.id)
         .map_err(map_store_error)?;
-    let mut blackboard_display_changed = !removed_stream_session_ids.is_empty();
     if state
         .blackboard
         .selected_submission_id()

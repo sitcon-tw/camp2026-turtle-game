@@ -9,7 +9,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{Mutex, broadcast};
 
 use crate::{
     config::Config,
@@ -19,8 +19,7 @@ use crate::{
         ChallengeSetId, ChallengeSetStatus, GamePhase, GameStateView, PreviewRunId, PublicVote,
         PublicVoteChoice, Round, RoundId, RoundResultEntry, ScoreEvent, ScoreEventId,
         ScoreEventRefs, ScoreEventType, Submission, SubmissionId, SubmissionStatus, Team, TeamId,
-        TeamNomination,
-        TeamSelectionVote, Timestamp,
+        TeamNomination, TeamSelectionVote, Timestamp,
     },
 };
 
@@ -34,7 +33,6 @@ pub struct AppState {
     pub auth_secret: Arc<str>,
     pub event_bus: EventBus,
     pub blackboard: BlackboardStore,
-    pub blackboard_signaling: BlackboardSignalHub,
     pub judge_lock: Arc<Mutex<()>>,
     pub queue_paused: Arc<RwLock<bool>>,
     pub repository: Arc<dyn Repository>,
@@ -72,7 +70,6 @@ impl AppState {
             auth_secret,
             event_bus: EventBus::new(EVENT_BUS_CAPACITY),
             blackboard: BlackboardStore::default(),
-            blackboard_signaling: BlackboardSignalHub::default(),
             judge_lock: Arc::new(Mutex::new(())),
             queue_paused: Arc::new(RwLock::new(false)),
             repository,
@@ -101,169 +98,6 @@ impl AppState {
             .map_err(|_| StoreError::LockUnavailable)?;
         *guard = paused;
         Ok(paused)
-    }
-}
-
-#[derive(Clone, Default)]
-pub struct BlackboardSignalHub {
-    inner: Arc<Mutex<BlackboardSignalHubInner>>,
-}
-
-#[derive(Default)]
-struct BlackboardSignalHubInner {
-    teams: HashMap<String, BlackboardTeamSignalEndpoint>,
-    viewers: HashMap<String, BlackboardViewerSignalEndpoint>,
-}
-
-struct BlackboardTeamSignalEndpoint {
-    connection_id: String,
-    sender: mpsc::UnboundedSender<String>,
-}
-
-struct BlackboardViewerSignalEndpoint {
-    session_id: String,
-    kind: BlackboardViewerKind,
-    sender: mpsc::UnboundedSender<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlackboardViewerKind {
-    Public,
-    AdminPreview,
-}
-
-impl BlackboardViewerKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Public => "public",
-            Self::AdminPreview => "admin_preview",
-        }
-    }
-}
-
-impl BlackboardSignalHub {
-    pub async fn register_team(
-        &self,
-        session_id: String,
-        connection_id: String,
-        sender: mpsc::UnboundedSender<String>,
-    ) {
-        let mut inner = self.inner.lock().await;
-        inner.teams.insert(
-            session_id,
-            BlackboardTeamSignalEndpoint {
-                connection_id,
-                sender,
-            },
-        );
-    }
-
-    pub async fn unregister_team(&self, session_id: &str, connection_id: &str) {
-        let mut inner = self.inner.lock().await;
-        if !inner
-            .teams
-            .get(session_id)
-            .is_some_and(|endpoint| endpoint.connection_id == connection_id)
-        {
-            return;
-        }
-        inner.teams.remove(session_id);
-        let viewer_ids: Vec<_> = inner
-            .viewers
-            .iter()
-            .filter_map(|(viewer_id, viewer)| {
-                (viewer.session_id == session_id).then(|| viewer_id.clone())
-            })
-            .collect();
-        for viewer_id in viewer_ids {
-            if let Some(viewer) = inner.viewers.remove(&viewer_id) {
-                let _ = viewer
-                    .sender
-                    .send(r#"{"type":"webrtc_stream_closed"}"#.to_owned());
-            }
-        }
-    }
-
-    pub async fn register_viewer(
-        &self,
-        session_id: String,
-        viewer_id: String,
-        kind: BlackboardViewerKind,
-        target_fps: u8,
-        sender: mpsc::UnboundedSender<String>,
-    ) -> bool {
-        let mut inner = self.inner.lock().await;
-        let Some(team) = inner.teams.get(&session_id) else {
-            return false;
-        };
-        let _ = team.sender.send(format!(
-            r#"{{"type":"webrtc_viewer_joined","viewer_id":"{viewer_id}","viewer_kind":"{}","target_fps":{target_fps}}}"#,
-            kind.as_str()
-        ));
-        inner.viewers.insert(
-            viewer_id,
-            BlackboardViewerSignalEndpoint {
-                session_id,
-                kind,
-                sender,
-            },
-        );
-        true
-    }
-
-    pub async fn unregister_viewer(&self, viewer_id: &str) {
-        let mut inner = self.inner.lock().await;
-        let Some(viewer) = inner.viewers.remove(viewer_id) else {
-            return;
-        };
-        if let Some(team) = inner.teams.get(&viewer.session_id) {
-            let _ = team.sender.send(format!(
-                r#"{{"type":"webrtc_viewer_left","viewer_id":"{viewer_id}","viewer_kind":"{}"}}"#,
-                viewer.kind.as_str()
-            ));
-        }
-    }
-
-    pub async fn send_to_team(&self, session_id: &str, payload: String) -> bool {
-        let inner = self.inner.lock().await;
-        inner
-            .teams
-            .get(session_id)
-            .is_some_and(|team| team.sender.send(payload).is_ok())
-    }
-
-    pub async fn send_to_viewer(&self, viewer_id: &str, payload: String) -> bool {
-        let inner = self.inner.lock().await;
-        inner
-            .viewers
-            .get(viewer_id)
-            .is_some_and(|viewer| viewer.sender.send(payload).is_ok())
-    }
-
-    pub async fn close_public_viewers_except(&self, selected_session_id: Option<&str>) {
-        let mut inner = self.inner.lock().await;
-        let viewer_ids: Vec<_> = inner
-            .viewers
-            .iter()
-            .filter_map(|(viewer_id, viewer)| {
-                (viewer.kind == BlackboardViewerKind::Public
-                    && selected_session_id != Some(viewer.session_id.as_str()))
-                .then(|| viewer_id.clone())
-            })
-            .collect();
-        for viewer_id in viewer_ids {
-            if let Some(viewer) = inner.viewers.remove(&viewer_id) {
-                let _ = viewer
-                    .sender
-                    .send(r#"{"type":"webrtc_stream_closed"}"#.to_owned());
-                if let Some(team) = inner.teams.get(&viewer.session_id) {
-                    let _ = team.sender.send(format!(
-                        r#"{{"type":"webrtc_viewer_left","viewer_id":"{viewer_id}","viewer_kind":"{}"}}"#,
-                        viewer.kind.as_str()
-                    ));
-                }
-            }
-        }
     }
 }
 
@@ -344,7 +178,6 @@ pub enum AppEvent {
 #[serde(rename_all = "snake_case")]
 pub enum BlackboardDisplayMode {
     Submission,
-    Stream,
     Preview,
 }
 
@@ -358,18 +191,7 @@ impl Default for BlackboardDisplayMode {
 pub struct BlackboardDisplay {
     pub mode: BlackboardDisplayMode,
     pub selected_submission_id: Option<SubmissionId>,
-    pub selected_stream_session_id: Option<String>,
     pub selected_preview_run_id: Option<PreviewRunId>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct BlackboardStreamSessionView {
-    pub session_id: String,
-    pub team_id: TeamId,
-    pub device_id: String,
-    pub label: String,
-    pub connected: bool,
-    pub last_seen_at: Timestamp,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -392,17 +214,6 @@ pub struct BlackboardPreviewSessionView {
     pub label: String,
     pub latest_preview_at: Timestamp,
     pub runs: Vec<BlackboardPreviewRunView>,
-}
-
-#[derive(Debug, Clone)]
-struct BlackboardStreamSession {
-    session_id: String,
-    team_id: TeamId,
-    device_id: String,
-    label: String,
-    active_connection_id: String,
-    connected: bool,
-    last_seen_at: Timestamp,
 }
 
 #[derive(Debug, Clone)]
@@ -429,9 +240,7 @@ struct BlackboardPreviewSession {
 #[derive(Clone, Default)]
 pub struct BlackboardStore {
     display: Arc<RwLock<BlackboardDisplay>>,
-    stream_sessions: Arc<RwLock<HashMap<String, BlackboardStreamSession>>>,
     preview_sessions: Arc<RwLock<HashMap<String, BlackboardPreviewSession>>>,
-    invalidated_stream_session_ids: Arc<RwLock<HashSet<String>>>,
 }
 
 impl BlackboardStore {
@@ -472,132 +281,8 @@ impl BlackboardStore {
             .map_err(|_| StoreError::LockUnavailable)?;
         display.mode = BlackboardDisplayMode::Submission;
         display.selected_submission_id = submission_id;
-        display.selected_stream_session_id = None;
         display.selected_preview_run_id = None;
         Ok(display.selected_submission_id)
-    }
-
-    pub fn register_stream_session(
-        &self,
-        session_id: String,
-        team_id: TeamId,
-        device_id: String,
-        connection_id: String,
-    ) -> Result<BlackboardStreamSessionView, StoreError> {
-        let now = Utc::now();
-        let invalidated_session_ids = self
-            .invalidated_stream_session_ids
-            .read()
-            .map_err(|_| StoreError::LockUnavailable)?;
-        if invalidated_session_ids.contains(&session_id) {
-            return Err(StoreError::InvalidatedStreamSession);
-        }
-        let mut sessions = self
-            .stream_sessions
-            .write()
-            .map_err(|_| StoreError::LockUnavailable)?;
-        let label = sessions
-            .get(&session_id)
-            .map(|session| session.label.clone())
-            .unwrap_or_else(|| {
-                let team_session_count = sessions
-                    .values()
-                    .filter(|session| session.team_id == team_id)
-                    .count()
-                    .saturating_add(1);
-                format!("Session {team_session_count}")
-            });
-        let session =
-            sessions
-                .entry(session_id.clone())
-                .or_insert_with(|| BlackboardStreamSession {
-                    session_id,
-                    team_id,
-                    device_id: device_id.clone(),
-                    label,
-                    active_connection_id: connection_id.clone(),
-                    connected: false,
-                    last_seen_at: now,
-                });
-        session.team_id = team_id;
-        session.device_id = device_id;
-        session.active_connection_id = connection_id;
-        session.connected = true;
-        session.last_seen_at = now;
-        Ok(self.session_view(session))
-    }
-
-    pub fn disconnect_stream_session(
-        &self,
-        session_id: &str,
-        connection_id: &str,
-    ) -> Result<bool, StoreError> {
-        let mut sessions = self
-            .stream_sessions
-            .write()
-            .map_err(|_| StoreError::LockUnavailable)?;
-        if let Some(session) = sessions.get_mut(session_id) {
-            if session.active_connection_id != connection_id {
-                return Ok(false);
-            }
-            session.connected = false;
-            session.last_seen_at = Utc::now();
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
-    pub fn expire_disconnected_stream_session(
-        &self,
-        session_id: &str,
-        connection_id: &str,
-    ) -> Result<bool, StoreError> {
-        let mut invalidated_session_ids = self
-            .invalidated_stream_session_ids
-            .write()
-            .map_err(|_| StoreError::LockUnavailable)?;
-        let mut sessions = self
-            .stream_sessions
-            .write()
-            .map_err(|_| StoreError::LockUnavailable)?;
-        let Some(session) = sessions.get(session_id) else {
-            return Ok(false);
-        };
-        if session.connected || session.active_connection_id != connection_id {
-            return Ok(false);
-        }
-        sessions.remove(session_id);
-        invalidated_session_ids.insert(session_id.to_owned());
-        let mut display = self
-            .display
-            .write()
-            .map_err(|_| StoreError::LockUnavailable)?;
-        if display
-            .selected_stream_session_id
-            .as_deref()
-            .is_some_and(|selected| selected == session_id)
-        {
-            *display = BlackboardDisplay::default();
-        }
-        Ok(true)
-    }
-
-    pub fn stream_sessions(&self) -> Result<Vec<BlackboardStreamSessionView>, StoreError> {
-        let sessions = self
-            .stream_sessions
-            .read()
-            .map_err(|_| StoreError::LockUnavailable)?;
-        let mut views: Vec<_> = sessions
-            .values()
-            .map(|session| self.session_view(session))
-            .collect();
-        views.sort_by(|left, right| {
-            left.team_id
-                .cmp(&right.team_id)
-                .then_with(|| left.label.cmp(&right.label))
-                .then_with(|| left.session_id.cmp(&right.session_id))
-        });
-        Ok(views)
     }
 
     pub fn record_preview_run(
@@ -647,15 +332,13 @@ impl BlackboardStore {
                 });
         session.team_id = team_id;
         session.device_id = device_id;
-        session.runs.retain(|existing| existing.round_id == round_id);
+        session
+            .runs
+            .retain(|existing| existing.round_id == round_id);
         session.runs.insert(0, run);
         session.runs.truncate(PREVIEW_RUNS_PER_SESSION);
-        let view = self.preview_run_view(
-            session
-                .runs
-                .first()
-                .expect("preview run was just inserted"),
-        );
+        let view =
+            self.preview_run_view(session.runs.first().expect("preview run was just inserted"));
         Ok(view)
     }
 
@@ -715,7 +398,6 @@ impl BlackboardStore {
             BlackboardDisplayMode::Submission
         };
         display.selected_submission_id = None;
-        display.selected_stream_session_id = None;
         display.selected_preview_run_id = preview_run_id;
         Ok(display.selected_preview_run_id)
     }
@@ -735,70 +417,23 @@ impl BlackboardStore {
         Ok(())
     }
 
-    pub fn stream_session(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<BlackboardStreamSessionView>, StoreError> {
-        let sessions = self
-            .stream_sessions
-            .read()
-            .map_err(|_| StoreError::LockUnavailable)?;
-        Ok(sessions
-            .get(session_id)
-            .map(|session| self.session_view(session)))
-    }
-
-    pub fn remove_team_sessions(&self, team_id: TeamId) -> Result<Vec<String>, StoreError> {
-        let mut sessions = self
-            .stream_sessions
-            .write()
-            .map_err(|_| StoreError::LockUnavailable)?;
-        let removed_session_ids: Vec<_> = sessions
-            .values()
-            .filter_map(|session| (session.team_id == team_id).then(|| session.session_id.clone()))
-            .collect();
-        for session_id in &removed_session_ids {
-            sessions.remove(session_id);
-        }
-        drop(sessions);
-
-        if !removed_session_ids.is_empty() {
-            let mut invalidated_session_ids = self
-                .invalidated_stream_session_ids
-                .write()
-                .map_err(|_| StoreError::LockUnavailable)?;
-            invalidated_session_ids.extend(removed_session_ids.iter().cloned());
-
-            let mut display = self
-                .display
-                .write()
-                .map_err(|_| StoreError::LockUnavailable)?;
-            if display
-                .selected_stream_session_id
-                .as_ref()
-                .is_some_and(|session_id| removed_session_ids.contains(session_id))
-            {
-                *display = BlackboardDisplay::default();
-            }
-        }
-
+    pub fn remove_team_preview_sessions(&self, team_id: TeamId) -> Result<bool, StoreError> {
         self.preview_sessions
             .write()
             .map_err(|_| StoreError::LockUnavailable)?
             .retain(|_, session| session.team_id != team_id);
 
-        Ok(removed_session_ids)
-    }
-
-    fn session_view(&self, session: &BlackboardStreamSession) -> BlackboardStreamSessionView {
-        BlackboardStreamSessionView {
-            session_id: session.session_id.clone(),
-            team_id: session.team_id,
-            device_id: session.device_id.clone(),
-            label: session.label.clone(),
-            connected: session.connected,
-            last_seen_at: session.last_seen_at,
-        }
+        let mut display = self
+            .display
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        let display_changed = if display.mode == BlackboardDisplayMode::Preview {
+            *display = BlackboardDisplay::default();
+            true
+        } else {
+            false
+        };
+        Ok(display_changed)
     }
 
     fn preview_session_view(
@@ -1951,8 +1586,6 @@ pub enum StoreError {
     DuplicateChallengeSlug,
     #[error("challenge pass score event already exists")]
     DuplicateChallengePass,
-    #[error("stream session id is invalid")]
-    InvalidatedStreamSession,
     #[error("{entity} was not found")]
     NotFound { entity: &'static str },
     #[error("submission is not queued")]
@@ -3805,202 +3438,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn expired_stream_session_is_removed_and_invalidated() {
-        let store = BlackboardStore::default();
-        let team_id = TeamId::from(uuid::Uuid::new_v4());
-
-        store
-            .register_stream_session(
-                "session-a".to_owned(),
-                team_id,
-                "device-a".to_owned(),
-                "connection-a".to_owned(),
-            )
-            .expect("stream session should register");
-
-        assert!(
-            !store
-                .expire_disconnected_stream_session("session-a", "connection-a")
-                .expect("connected session should not expire")
-        );
-
-        assert!(
-            store
-                .disconnect_stream_session("session-a", "connection-a")
-                .expect("session should disconnect")
-        );
-        assert!(
-            store
-                .expire_disconnected_stream_session("session-a", "connection-a")
-                .expect("offline session should expire")
-        );
-        assert!(
-            store
-                .stream_sessions()
-                .expect("sessions should read")
-                .is_empty()
-        );
-        assert!(matches!(
-            store.register_stream_session(
-                "session-a".to_owned(),
-                team_id,
-                "device-a".to_owned(),
-                "connection-b".to_owned(),
-            ),
-            Err(StoreError::InvalidatedStreamSession)
-        ));
-    }
-
-    #[test]
-    fn stale_stream_connection_cannot_disconnect_replacement() {
-        let store = BlackboardStore::default();
-        let team_id = TeamId::from(uuid::Uuid::new_v4());
-
-        store
-            .register_stream_session(
-                "session-a".to_owned(),
-                team_id,
-                "device-a".to_owned(),
-                "connection-a".to_owned(),
-            )
-            .expect("first stream session should register");
-        store
-            .register_stream_session(
-                "session-a".to_owned(),
-                team_id,
-                "device-a".to_owned(),
-                "connection-b".to_owned(),
-            )
-            .expect("replacement stream session should register");
-
-        assert!(
-            !store
-                .disconnect_stream_session("session-a", "connection-a")
-                .expect("stale connection should be ignored")
-        );
-        assert!(
-            !store
-                .expire_disconnected_stream_session("session-a", "connection-a")
-                .expect("stale connection should not expire replacement")
-        );
-
-        let session = store
-            .stream_session("session-a")
-            .expect("active session should read")
-            .expect("active session should exist");
-        assert!(session.connected);
-        assert_eq!(session.device_id, "device-a");
-    }
-
-    #[tokio::test]
-    async fn blackboard_signaling_routes_viewer_lifecycle_messages() {
-        let hub = BlackboardSignalHub::default();
-        let (team_tx, mut team_rx) = mpsc::unbounded_channel();
-        let (viewer_tx, mut viewer_rx) = mpsc::unbounded_channel();
-
-        hub.register_team("session-a".to_owned(), "connection-a".to_owned(), team_tx)
-            .await;
-
-        assert!(
-            hub.register_viewer(
-                "session-a".to_owned(),
-                "viewer-a".to_owned(),
-                BlackboardViewerKind::Public,
-                60,
-                viewer_tx,
-            )
-            .await
-        );
-        assert_eq!(
-            recv_signal(&mut team_rx).await,
-            r#"{"type":"webrtc_viewer_joined","viewer_id":"viewer-a","viewer_kind":"public","target_fps":60}"#
-        );
-
-        assert!(hub.send_to_viewer("viewer-a", "offer".to_owned()).await);
-        assert_eq!(recv_signal(&mut viewer_rx).await, "offer");
-
-        assert!(hub.send_to_team("session-a", "answer".to_owned()).await);
-        assert_eq!(recv_signal(&mut team_rx).await, "answer");
-
-        hub.unregister_viewer("viewer-a").await;
-        assert_eq!(
-            recv_signal(&mut team_rx).await,
-            r#"{"type":"webrtc_viewer_left","viewer_id":"viewer-a","viewer_kind":"public"}"#
-        );
-    }
-
-    #[tokio::test]
-    async fn blackboard_signaling_closes_only_unselected_public_viewers() {
-        let hub = BlackboardSignalHub::default();
-        let (team_a_tx, mut team_a_rx) = mpsc::unbounded_channel();
-        let (team_b_tx, mut team_b_rx) = mpsc::unbounded_channel();
-        let (viewer_a_tx, mut viewer_a_rx) = mpsc::unbounded_channel();
-        let (viewer_b_tx, mut viewer_b_rx) = mpsc::unbounded_channel();
-        let (admin_viewer_tx, mut admin_viewer_rx) = mpsc::unbounded_channel();
-
-        hub.register_team("session-a".to_owned(), "connection-a".to_owned(), team_a_tx)
-            .await;
-        hub.register_team("session-b".to_owned(), "connection-b".to_owned(), team_b_tx)
-            .await;
-        assert!(
-            hub.register_viewer(
-                "session-a".to_owned(),
-                "viewer-a".to_owned(),
-                BlackboardViewerKind::Public,
-                60,
-                viewer_a_tx,
-            )
-            .await
-        );
-        assert!(
-            hub.register_viewer(
-                "session-b".to_owned(),
-                "viewer-b".to_owned(),
-                BlackboardViewerKind::Public,
-                60,
-                viewer_b_tx,
-            )
-            .await
-        );
-        assert!(
-            hub.register_viewer(
-                "session-b".to_owned(),
-                "admin-viewer".to_owned(),
-                BlackboardViewerKind::AdminPreview,
-                2,
-                admin_viewer_tx,
-            )
-            .await
-        );
-        let _ = recv_signal(&mut team_a_rx).await;
-        let _ = recv_signal(&mut team_b_rx).await;
-        let _ = recv_signal(&mut team_b_rx).await;
-
-        hub.close_public_viewers_except(Some("session-a")).await;
-
-        assert_eq!(
-            recv_signal(&mut viewer_b_rx).await,
-            r#"{"type":"webrtc_stream_closed"}"#
-        );
-        assert_eq!(
-            recv_signal(&mut team_b_rx).await,
-            r#"{"type":"webrtc_viewer_left","viewer_id":"viewer-b","viewer_kind":"public"}"#
-        );
-        assert!(viewer_a_rx.try_recv().is_err());
-        assert!(admin_viewer_rx.try_recv().is_err());
-        assert!(
-            hub.send_to_viewer("viewer-a", "still-open".to_owned())
-                .await
-        );
-        assert_eq!(recv_signal(&mut viewer_a_rx).await, "still-open");
-        assert!(
-            hub.send_to_viewer("admin-viewer", "preview-open".to_owned())
-                .await
-        );
-        assert_eq!(recv_signal(&mut admin_viewer_rx).await, "preview-open");
-    }
-
-    #[test]
     fn login_code_must_be_unique() {
         let store = InMemoryDatabase::default();
 
@@ -4526,12 +3963,5 @@ mod tests {
             })
             .expect("challenge should create");
         (team, challenge)
-    }
-
-    async fn recv_signal(receiver: &mut mpsc::UnboundedReceiver<String>) -> String {
-        tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
-            .await
-            .expect("signal should arrive")
-            .expect("signal channel should remain open")
     }
 }

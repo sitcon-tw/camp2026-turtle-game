@@ -33,15 +33,17 @@ async fn blackboard_reports_idle_state_without_queue_fields() {
     assert!(idle_body.get("queue_length").is_none());
     assert!(idle_body.get("running").is_none());
     assert!(idle_body.get("paused").is_none());
+    assert!(idle_body.get("stream_sessions").is_none());
+    assert!(
+        idle_body["display"]
+            .get("selected_stream_session_id")
+            .is_none()
+    );
 }
 
 #[tokio::test]
-async fn admin_controls_stream_display_without_frame_polling_routes() {
+async fn blackboard_streaming_surface_is_removed() {
     let state = AppState::new(Config::default());
-    let team = state
-        .repository
-        .create_team("Team", "TEAM", None)
-        .expect("team should create");
     let admin_token = issue_token(
         "admin",
         Role::Admin,
@@ -49,15 +51,6 @@ async fn admin_controls_stream_display_without_frame_polling_routes() {
         state.auth_secret.as_ref(),
     )
     .expect("admin token should issue");
-    state
-        .blackboard
-        .register_stream_session(
-            "session-a".to_owned(),
-            team.id,
-            "device-a".to_owned(),
-            "connection-a".to_owned(),
-        )
-        .expect("stream session should register");
     let app = router(state.clone());
 
     let unauthorized = app
@@ -78,7 +71,12 @@ async fn admin_controls_stream_display_without_frame_polling_routes() {
     assert_eq!(control.status(), StatusCode::OK);
     let control_body = response_json(control).await;
     assert_eq!(control_body["display"]["mode"], "submission");
-    assert_eq!(control_body["stream_sessions"].as_array().unwrap().len(), 1);
+    assert!(control_body.get("stream_sessions").is_none());
+    assert!(
+        control_body["display"]
+            .get("selected_stream_session_id")
+            .is_none()
+    );
 
     let stream_display = app
         .clone()
@@ -93,13 +91,7 @@ async fn admin_controls_stream_display_without_frame_polling_routes() {
         )
         .await
         .expect("request completes");
-    assert_eq!(stream_display.status(), StatusCode::OK);
-    let stream_body = response_json(stream_display).await;
-    assert_eq!(stream_body["display"]["mode"], "stream");
-    assert_eq!(
-        stream_body["display"]["selected_stream_session_id"],
-        "session-a"
-    );
+    assert_eq!(stream_display.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
     let public_state = app
         .clone()
@@ -108,30 +100,40 @@ async fn admin_controls_stream_display_without_frame_polling_routes() {
         .expect("request completes");
     assert_eq!(public_state.status(), StatusCode::OK);
     let public_body = response_json(public_state).await;
-    assert_eq!(public_body["display"]["mode"], "stream");
-    assert_eq!(public_body["stream_sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(public_body["display"]["mode"], "submission");
+    assert!(public_body.get("stream_sessions").is_none());
+    assert!(
+        public_body["display"]
+            .get("selected_stream_session_id")
+            .is_none()
+    );
 
-    let public_frame = app
+    let team_stream = app
         .clone()
-        .oneshot(
-            get_request("/api/v1/blackboard/stream/frame?after=0", None).expect("request builds"),
-        )
+        .oneshot(get_request("/api/v1/blackboard/stream/team", None).expect("request builds"))
         .await
         .expect("request completes");
-    assert_eq!(public_frame.status(), StatusCode::NOT_FOUND);
+    assert_eq!(team_stream.status(), StatusCode::NOT_FOUND);
 
-    let admin_frame = app
+    let public_stream = app
+        .clone()
+        .oneshot(get_request("/api/v1/blackboard/stream/viewer", None).expect("request builds"))
+        .await
+        .expect("request completes");
+    assert_eq!(public_stream.status(), StatusCode::NOT_FOUND);
+
+    let admin_stream = app
         .clone()
         .oneshot(
             get_request(
-                "/api/v1/admin/blackboard/stream-sessions/session-a/frame?after=0",
+                "/api/v1/admin/blackboard/stream-sessions/session-a/viewer",
                 Some(&admin_token),
             )
             .expect("request builds"),
         )
         .await
         .expect("request completes");
-    assert_eq!(admin_frame.status(), StatusCode::NOT_FOUND);
+    assert_eq!(admin_stream.status(), StatusCode::NOT_FOUND);
 
     let submission_display = app
         .clone()
@@ -149,7 +151,11 @@ async fn admin_controls_stream_display_without_frame_polling_routes() {
     assert_eq!(submission_display.status(), StatusCode::OK);
     let submission_body = response_json(submission_display).await;
     assert_eq!(submission_body["display"]["mode"], "submission");
-    assert!(submission_body["display"]["selected_stream_session_id"].is_null());
+    assert!(
+        submission_body["display"]
+            .get("selected_stream_session_id")
+            .is_none()
+    );
 }
 
 #[tokio::test]

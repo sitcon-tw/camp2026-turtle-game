@@ -104,9 +104,6 @@ impl From<StoreError> for AppError {
             StoreError::DuplicateChallengePass => {
                 Self::bad_request("challenge pass score event already exists")
             }
-            StoreError::InvalidatedStreamSession => {
-                Self::bad_request_code("stream_session_invalid", "stream session id is invalid")
-            }
             StoreError::ScoreOverflow => Self::bad_request("score update overflowed"),
             StoreError::AdminSetRequiresScore => {
                 Self::bad_request("admin set score event requires a target score")
