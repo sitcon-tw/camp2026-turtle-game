@@ -170,8 +170,9 @@ async fn update_team(
 
 #[derive(Debug, Serialize)]
 struct DeleteTeamResponse {
-    disabled: bool,
-    team: Team,
+    deleted: bool,
+    team_id: TeamId,
+    deleted_submission_count: usize,
 }
 
 async fn delete_team(
@@ -179,13 +180,57 @@ async fn delete_team(
     State(state): State<AppState>,
     Path(team_id): Path<Uuid>,
 ) -> Result<Json<DeleteTeamResponse>, AppError> {
-    let team = state
+    let deletion = state
         .repository
-        .set_team_enabled(TeamId::from(team_id), false)
+        .delete_team(TeamId::from(team_id))
         .map_err(map_store_error)?;
+    let game_view = state
+        .game
+        .remove_team_references(deletion.team.id, &deletion.submission_ids)
+        .map_err(|error| AppError::internal(format!("game cleanup failed: {error}")))?;
+    if let Some(view) = game_view {
+        state
+            .event_bus
+            .publish(crate::state::AppEvent::GameStateChanged {
+                version: view.version,
+            });
+    }
+    let removed_stream_session_ids = state
+        .blackboard
+        .remove_team_sessions(deletion.team.id)
+        .map_err(map_store_error)?;
+    let mut blackboard_display_changed = !removed_stream_session_ids.is_empty();
+    if state
+        .blackboard
+        .selected_submission_id()
+        .map_err(map_store_error)?
+        .is_some_and(|submission_id| deletion.submission_ids.contains(&submission_id))
+    {
+        state
+            .blackboard
+            .set_selected_submission_id(None)
+            .map_err(map_store_error)?;
+        state
+            .event_bus
+            .publish(crate::state::AppEvent::BlackboardPlaybackChanged {
+                submission_id: None,
+            });
+        blackboard_display_changed = true;
+    }
+    if blackboard_display_changed {
+        state
+            .event_bus
+            .publish(crate::state::AppEvent::BlackboardDisplayChanged {
+                display: state.blackboard.display().map_err(map_store_error)?,
+            });
+    }
+    state
+        .event_bus
+        .publish(crate::state::AppEvent::LeaderboardUpdated);
     Ok(Json(DeleteTeamResponse {
-        disabled: true,
-        team,
+        deleted: true,
+        team_id: deletion.team.id,
+        deleted_submission_count: deletion.submission_ids.len(),
     }))
 }
 

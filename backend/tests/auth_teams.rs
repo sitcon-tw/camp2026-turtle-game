@@ -266,6 +266,18 @@ async fn admin_can_create_list_get_update_rotate_delete_and_bulk_create_teams() 
         Method::PATCH,
         &format!("/api/v1/admin/teams/{}", created_id.as_uuid()),
         Some(&admin_token),
+        json!({ "enabled": true }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let enabled = response_json(response).await;
+    assert_eq!(enabled["enabled"], true);
+
+    let response = json_request(
+        app.clone(),
+        Method::PATCH,
+        &format!("/api/v1/admin/teams/{}", created_id.as_uuid()),
+        Some(&admin_token),
         json!({ "login_code": "BETA42" }),
     )
     .await;
@@ -300,8 +312,19 @@ async fn admin_can_create_list_get_update_rotate_delete_and_bulk_create_teams() 
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     let deleted = response_json(response).await;
-    assert_eq!(deleted["disabled"], true);
-    assert_eq!(deleted["team"]["enabled"], false);
+    assert_eq!(deleted["deleted"], true);
+    assert_eq!(deleted["team_id"], created_id.as_uuid().to_string());
+    assert_eq!(deleted["deleted_submission_count"], 0);
+
+    let response = json_request(
+        app.clone(),
+        Method::GET,
+        &format!("/api/v1/admin/teams/{}", created_id.as_uuid()),
+        Some(&admin_token),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let response = json_request(
         app,

@@ -558,6 +558,43 @@ impl BlackboardStore {
             .map(|session| self.session_view(session)))
     }
 
+    pub fn remove_team_sessions(&self, team_id: TeamId) -> Result<Vec<String>, StoreError> {
+        let mut sessions = self
+            .stream_sessions
+            .write()
+            .map_err(|_| StoreError::LockUnavailable)?;
+        let removed_session_ids: Vec<_> = sessions
+            .values()
+            .filter_map(|session| (session.team_id == team_id).then(|| session.session_id.clone()))
+            .collect();
+        for session_id in &removed_session_ids {
+            sessions.remove(session_id);
+        }
+        drop(sessions);
+
+        if !removed_session_ids.is_empty() {
+            let mut invalidated_session_ids = self
+                .invalidated_stream_session_ids
+                .write()
+                .map_err(|_| StoreError::LockUnavailable)?;
+            invalidated_session_ids.extend(removed_session_ids.iter().cloned());
+
+            let mut display = self
+                .display
+                .write()
+                .map_err(|_| StoreError::LockUnavailable)?;
+            if display
+                .selected_stream_session_id
+                .as_ref()
+                .is_some_and(|session_id| removed_session_ids.contains(session_id))
+            {
+                *display = BlackboardDisplay::default();
+            }
+        }
+
+        Ok(removed_session_ids)
+    }
+
     fn session_view(&self, session: &BlackboardStreamSession) -> BlackboardStreamSessionView {
         BlackboardStreamSessionView {
             session_id: session.session_id.clone(),
@@ -611,6 +648,7 @@ pub trait Repository: Database {
     fn team_by_login_code(&self, login_code: &str) -> Result<Option<Team>, StoreError>;
     fn list_teams(&self) -> Result<Vec<Team>, StoreError>;
     fn set_team_enabled(&self, team_id: TeamId, enabled: bool) -> Result<Team, StoreError>;
+    fn delete_team(&self, team_id: TeamId) -> Result<TeamDeletion, StoreError>;
     fn update_team(&self, team_id: TeamId, update: TeamUpdate) -> Result<Team, StoreError>;
 
     fn create_challenge_set(
@@ -976,6 +1014,72 @@ impl GameStore {
             .read_inner()?
             .round_submissions
             .contains_key(&submission_id))
+    }
+
+    pub fn remove_team_references(
+        &self,
+        team_id: TeamId,
+        submission_ids: &[SubmissionId],
+    ) -> Result<Option<GameStateView>, GameError> {
+        let mut inner = self.write_inner()?;
+        let submission_ids: HashSet<_> = submission_ids.iter().copied().collect();
+        let mut changed = false;
+
+        let previous_len = inner.round_submissions.len();
+        inner
+            .round_submissions
+            .retain(|submission_id, _| !submission_ids.contains(submission_id));
+        changed |= inner.round_submissions.len() != previous_len;
+
+        let previous_len = inner.team_selection_votes.len();
+        inner.team_selection_votes.retain(|_, vote| {
+            vote.team_id != team_id && !submission_ids.contains(&vote.submission_id)
+        });
+        changed |= inner.team_selection_votes.len() != previous_len;
+
+        let previous_len = inner.nominations.len();
+        inner.nominations.retain(|_, nomination| {
+            nomination.team_id != team_id && !submission_ids.contains(&nomination.submission_id)
+        });
+        changed |= inner.nominations.len() != previous_len;
+
+        let previous_len = inner.public_votes.len();
+        inner
+            .public_votes
+            .retain(|_, vote| vote.voter_team_id != team_id);
+        for vote in inner.public_votes.values_mut() {
+            let choice_count = vote.choices.len();
+            vote.choices.retain(|choice| {
+                choice.target_team_id != team_id
+                    && !submission_ids.contains(&choice.target_submission_id)
+            });
+            changed |= vote.choices.len() != choice_count;
+        }
+        inner
+            .public_votes
+            .retain(|_, vote| !vote.choices.is_empty());
+        changed |= inner.public_votes.len() != previous_len;
+
+        for results in inner.results.values_mut() {
+            let previous_len = results.len();
+            results.retain(|result| {
+                result.team_id != team_id && !submission_ids.contains(&result.submission_id)
+            });
+            changed |= results.len() != previous_len;
+        }
+
+        changed |= inner.top_three_streaks.remove(&team_id).is_some();
+
+        if !changed {
+            return Ok(None);
+        }
+
+        let now = Utc::now();
+        inner.version = inner.version.saturating_add(1);
+        inner.updated_at = now;
+        let view = inner.view(now);
+        self.persist_inner(&inner)?;
+        Ok(Some(view))
     }
 
     pub fn attach_submission(&self, submission: &Submission) -> Result<GameStateView, GameError> {
@@ -1709,6 +1813,12 @@ pub struct ScoreEventListFilter {
     pub event_type: Option<ScoreEventType>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TeamDeletion {
+    pub team: Team,
+    pub submission_ids: Vec<SubmissionId>,
+}
+
 impl ScoreEventInput {
     pub fn challenge_pass(
         team_id: TeamId,
@@ -1828,6 +1938,10 @@ impl Repository for InMemoryDatabase {
 
     fn set_team_enabled(&self, team_id: TeamId, enabled: bool) -> Result<Team, StoreError> {
         InMemoryDatabase::set_team_enabled(self, team_id, enabled)
+    }
+
+    fn delete_team(&self, team_id: TeamId) -> Result<TeamDeletion, StoreError> {
+        InMemoryDatabase::delete_team(self, team_id)
     }
 
     fn update_team(&self, team_id: TeamId, update: TeamUpdate) -> Result<Team, StoreError> {
@@ -2124,6 +2238,39 @@ impl InMemoryDatabase {
         let team = team.clone();
         self.persist_inner(&inner)?;
         Ok(team)
+    }
+
+    pub fn delete_team(&self, team_id: TeamId) -> Result<TeamDeletion, StoreError> {
+        let mut inner = self.write_inner()?;
+        let team = inner
+            .teams
+            .remove(&team_id)
+            .ok_or(StoreError::NotFound { entity: "team" })?;
+        inner.login_codes.remove(&team.login_code);
+        inner.last_submission_at.remove(&team_id);
+
+        let submission_ids: HashSet<_> = inner
+            .submissions
+            .values()
+            .filter_map(|submission| (submission.team_id == team_id).then_some(submission.id))
+            .collect();
+        inner
+            .submissions
+            .retain(|_, submission| submission.team_id != team_id);
+        inner.score_events.retain(|event| {
+            event.team_id != team_id
+                && event
+                    .refs
+                    .submission_id
+                    .is_none_or(|submission_id| !submission_ids.contains(&submission_id))
+        });
+
+        let submission_ids = submission_ids.into_iter().collect();
+        self.persist_inner(&inner)?;
+        Ok(TeamDeletion {
+            team,
+            submission_ids,
+        })
     }
 
     pub fn update_team(&self, team_id: TeamId, update: TeamUpdate) -> Result<Team, StoreError> {
@@ -3632,6 +3779,86 @@ mod tests {
 
         assert!(first.is_ok());
         assert_eq!(second, Err(StoreError::DuplicateLoginCode));
+    }
+
+    #[test]
+    fn deleting_team_removes_team_owned_records() {
+        let store = InMemoryDatabase::default();
+        let team = store
+            .create_team("team", "TEAM42", None)
+            .expect("team should create");
+        let challenge_set = store
+            .create_challenge_set("set", "v1", ChallengeSetStatus::Active)
+            .expect("challenge set should create");
+        let challenge = store
+            .create_challenge(NewChallenge {
+                challenge_set_id: challenge_set.id,
+                slug: "challenge".to_owned(),
+                title: "Challenge".to_owned(),
+                description: "Draw".to_owned(),
+                target_image_asset_id: None,
+                target_image_path: None,
+                target_image_url: None,
+                points: 10,
+                enabled: true,
+                order: 1,
+                canvas: CanvasConfig::default(),
+                judge_config: json!({}),
+            })
+            .expect("challenge should create");
+        let submission = store
+            .create_submission(team.id, challenge.id, json!({ "blocks": [] }), None)
+            .expect("submission should create");
+        store
+            .append_score_event(ScoreEventInput {
+                team_id: team.id,
+                event_type: ScoreEventType::AdminAdd,
+                delta: 5,
+                score_after: None,
+                refs: ScoreEventRefs {
+                    challenge_id: Some(challenge.id),
+                    submission_id: Some(submission.id),
+                },
+                reason: None,
+                created_by: None,
+            })
+            .expect("score event should create");
+
+        let deletion = store.delete_team(team.id).expect("team should delete");
+
+        assert_eq!(deletion.team.id, team.id);
+        assert_eq!(deletion.submission_ids.len(), 1);
+        assert!(deletion.submission_ids.contains(&submission.id));
+        assert!(
+            store
+                .get_team(team.id)
+                .expect("store should read")
+                .is_none()
+        );
+        assert!(
+            store
+                .team_by_login_code("TEAM42")
+                .expect("store should read")
+                .is_none()
+        );
+        assert!(
+            store
+                .list_submissions(SubmissionListFilter {
+                    team_id: Some(team.id),
+                    ..SubmissionListFilter::default()
+                })
+                .expect("store should read")
+                .is_empty()
+        );
+        assert!(
+            store
+                .list_score_events(ScoreEventListFilter {
+                    team_id: Some(team.id),
+                    ..ScoreEventListFilter::default()
+                })
+                .expect("store should read")
+                .is_empty()
+        );
     }
 
     #[test]
