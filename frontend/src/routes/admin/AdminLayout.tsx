@@ -33,9 +33,9 @@ import { clearAdminToken, getAdminToken } from "@/lib/admin/session"
 import type { AdminMeResponse } from "@/lib/admin/types"
 
 const navItems = [
-  { href: "/admin", label: "Command Center", icon: Gamepad2Icon },
-  { href: "/admin/challenges", label: "Challenges", icon: ListChecksIcon },
-  { href: "/admin/teams", label: "Teams", icon: UsersIcon },
+  { href: "/admin", label: "指揮中心", icon: Gamepad2Icon },
+  { href: "/admin/challenges", label: "挑戰題目", icon: ListChecksIcon },
+  { href: "/admin/teams", label: "隊伍", icon: UsersIcon },
 ]
 
 function isActivePath(pathname: string, href: string) {
@@ -79,7 +79,7 @@ export default function AdminLayout() {
   }, [token])
 
   const activeLabel = useMemo(() => {
-    return navItems.find((item) => isActivePath(location.pathname, item.href))?.label ?? "Admin"
+    return navItems.find((item) => isActivePath(location.pathname, item.href))?.label ?? "管理後台"
   }, [location.pathname])
 
   function handleLogout() {
@@ -95,7 +95,7 @@ export default function AdminLayout() {
     return (
       <main className="min-h-svh bg-paper p-4 text-ink sm:p-8">
         <div className="mx-auto max-w-3xl">
-          <LoadingState title="Opening admin" description="Checking your admin session." rows={4} />
+          <LoadingState title="正在開啟管理後台" description="正在檢查管理員工作階段。" rows={4} />
         </div>
       </main>
     )
@@ -117,7 +117,7 @@ export default function AdminLayout() {
                 </span>
                 <span className="grid flex-1 text-left leading-tight">
                   <span className="truncate font-medium">繪圖挑戰賽</span>
-                  <span className="truncate text-xs text-muted-foreground">Admin Console</span>
+                  <span className="truncate text-xs text-muted-foreground">管理後台</span>
                 </span>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -125,7 +125,7 @@ export default function AdminLayout() {
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupLabel>Operations</SidebarGroupLabel>
+            <SidebarGroupLabel>操作</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {navItems.map((item) => (
@@ -151,7 +151,7 @@ export default function AdminLayout() {
               <p className="truncate text-sm font-medium">{session.subject}</p>
               <p className="text-xs text-muted-foreground">{session.role}</p>
             </div>
-            <Button variant="ghost" size="icon-sm" onClick={handleLogout} aria-label="Log out">
+            <Button variant="ghost" size="icon-sm" onClick={handleLogout} aria-label="登出">
               <LogOutIcon />
             </Button>
           </div>
@@ -163,13 +163,13 @@ export default function AdminLayout() {
           <SidebarTrigger />
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="min-w-0">
-              <p className="truncate text-sm text-muted-foreground">Admin</p>
+              <p className="truncate text-sm text-muted-foreground">管理後台</p>
               <h1 className="truncate text-lg font-semibold tracking-tight">{activeLabel}</h1>
             </div>
           </div>
           <AdminHealthPill ok={healthOk} />
           <Button variant="outline" size="sm" nativeButton={false} render={<Link to="/" />}>
-            <ArrowLeftIcon /> Home
+            <ArrowLeftIcon /> 返回遊戲
           </Button>
         </header>
         <main className="flex-1 bg-paper p-4 sm:p-6">

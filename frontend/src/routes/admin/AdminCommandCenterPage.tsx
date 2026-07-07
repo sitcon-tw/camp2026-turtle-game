@@ -142,7 +142,7 @@ export default function AdminCommandCenterPage() {
 
   const extendTimer = useMutation({
     mutationFn: () => {
-      if (!snapshot) throw new Error("No active game state")
+      if (!snapshot) throw new Error("目前沒有進行中的遊戲狀態")
       return adminApi.updateGameTimer({
         phase_ends_at: extendedDeadlineIso(snapshot, positiveInteger(extendSeconds, 60)),
       })
@@ -246,8 +246,8 @@ export default function AdminCommandCenterPage() {
 
       <Card>
         <CardHeader className="border-b">
-          <CardTitle>Host Controls</CardTitle>
-          <CardDescription>Start, advance, extend, and score the live round.</CardDescription>
+          <CardTitle>主持控制</CardTitle>
+          <CardDescription>開始新回合、推進階段、延長時間並計分。</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 pt-4">
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -342,25 +342,25 @@ function CommandHeader({
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
           <div className="min-w-0">
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <CardTitle className="text-2xl">Admin Command Center</CardTitle>
+              <CardTitle className="text-2xl">管理指揮中心</CardTitle>
               <PhaseBadge phase={snapshot.state.phase} />
               <Badge variant={connectionState === "open" ? "secondary" : "outline"}>
-                {connectionState === "open" ? "Live" : "Sync"}
+                {connectionState === "open" ? "即時" : "同步中"}
               </Badge>
             </div>
             <CardDescription className="truncate">
-              {snapshot.challenge ? `${snapshot.challenge.title} / ${snapshot.challenge.description}` : "No active round"}
+              {snapshot.challenge ? `${snapshot.challenge.title} / ${snapshot.challenge.description}` : "目前沒有進行中的回合"}
             </CardDescription>
           </div>
           <HeaderTimer snapshot={snapshot} />
         </div>
       </CardHeader>
       <CardContent className="grid gap-3 pt-4 sm:grid-cols-2 xl:grid-cols-5">
-        <StatTile label="Round" value={snapshot.round?.id.slice(0, 8) ?? "none"} />
-        <StatTile label="Teams" value={`${teams.filter((team) => team.enabled).length}/${teams.length}`} />
-        <StatTile label="Submissions" value={snapshot.round_submissions.length} />
-        <StatTile label="Nominations" value={snapshot.nominations.length} />
-        <StatTile label="Leader" value={leaderboard[0]?.team_name ?? "none"} />
+        <StatTile label="回合" value={snapshot.round?.id.slice(0, 8) ?? "無"} />
+        <StatTile label="隊伍" value={`${teams.filter((team) => team.enabled).length}/${teams.length}`} />
+        <StatTile label="提交" value={snapshot.round_submissions.length} />
+        <StatTile label="提名" value={snapshot.nominations.length} />
+        <StatTile label="領先" value={leaderboard[0]?.team_name ?? "無"} />
       </CardContent>
     </Card>
   )
@@ -372,10 +372,10 @@ function HeaderTimer({ snapshot }: { snapshot: GameStateResponse }) {
     <div className="rounded-[1rem] border-2 border-ink bg-surface-raised p-3 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
       <div className="flex items-center gap-2 text-sm font-black text-muted-foreground">
         <ClockIcon className="size-4" />
-        Timer
+        計時器
       </div>
       <div className="mt-2 font-mono text-3xl font-black tabular-nums">{formatTimer(seconds)}</div>
-      <div className="mt-1 text-xs font-bold text-muted-foreground">server {formatClock(snapshot.state.server_now)}</div>
+      <div className="mt-1 text-xs font-bold text-muted-foreground">伺服器 {formatClock(snapshot.state.server_now)}</div>
     </div>
   )
 }
@@ -407,19 +407,19 @@ function StartRoundPanel({
   return (
     <div className="rounded-[1rem] border-2 border-ink bg-surface-raised p-4 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
       <div className="mb-4">
-        <h2 className="font-black">Start Round</h2>
-        <p className="text-sm font-semibold text-muted-foreground">Uses enabled challenges from the active challenge set.</p>
+        <h2 className="font-black">開始回合</h2>
+        <p className="text-sm font-semibold text-muted-foreground">使用目前挑戰題組中已啟用的題目。</p>
       </div>
       <FieldGroup>
         <Field>
-          <FieldLabel>Challenge</FieldLabel>
+          <FieldLabel>挑戰題目</FieldLabel>
           <Select
             items={challenges.map((challenge) => ({ value: challenge.id, label: challenge.title }))}
             value={form.challengeId}
             onValueChange={(value) => onChange({ ...form, challengeId: value ?? "" })}
           >
-            <SelectTrigger className="w-full" aria-label="Challenge">
-              <SelectValue placeholder="Select challenge" />
+            <SelectTrigger className="w-full" aria-label="挑戰題目">
+              <SelectValue placeholder="選擇挑戰題目" />
             </SelectTrigger>
             <SelectContent>
               {challenges.map((challenge) => (
@@ -432,7 +432,7 @@ function StartRoundPanel({
         </Field>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field>
-            <FieldLabel htmlFor="submission-seconds">Submission seconds</FieldLabel>
+            <FieldLabel htmlFor="submission-seconds">提交時間（秒）</FieldLabel>
             <Input
               id="submission-seconds"
               inputMode="numeric"
@@ -441,7 +441,7 @@ function StartRoundPanel({
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="public-votes-per-team">Votes per team</FieldLabel>
+            <FieldLabel htmlFor="public-votes-per-team">每隊公開投票票數</FieldLabel>
             <Input
               id="public-votes-per-team"
               inputMode="numeric"
@@ -452,7 +452,7 @@ function StartRoundPanel({
         </div>
         <Button disabled={!form.challengeId || !canStartRound || isPending} onClick={onStart}>
           {isPending ? <Loader2Icon data-icon="inline-start" className="animate-spin" /> : <PlayIcon data-icon="inline-start" />}
-          {canStartRound ? "Start Round" : "Round Active"}
+          {canStartRound ? "開始回合" : "回合進行中"}
         </Button>
       </FieldGroup>
     </div>
@@ -477,12 +477,12 @@ function TimerPanel({
   return (
     <div className="rounded-[1rem] border-2 border-ink bg-surface-raised p-4 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
       <div className="mb-4">
-        <h2 className="font-black">Timer</h2>
-        <p className="text-sm font-semibold text-muted-foreground">Current phase deadline is extended from the later of server time or deadline.</p>
+        <h2 className="font-black">計時器</h2>
+        <p className="text-sm font-semibold text-muted-foreground">目前階段的截止時間會從伺服器時間或原截止時間中較晚者往後延長。</p>
       </div>
       <FieldGroup>
         <Field>
-          <FieldLabel htmlFor="extend-seconds">Extend seconds</FieldLabel>
+          <FieldLabel htmlFor="extend-seconds">延長秒數</FieldLabel>
           <Input
             id="extend-seconds"
             inputMode="numeric"
@@ -493,7 +493,7 @@ function TimerPanel({
         </Field>
         <Button variant="outline" disabled={!canExtend || isPending} onClick={onExtend}>
           {isPending ? <Loader2Icon data-icon="inline-start" className="animate-spin" /> : <ClockIcon data-icon="inline-start" />}
-          Extend Timer
+          延長計時
         </Button>
       </FieldGroup>
     </div>
@@ -534,7 +534,7 @@ function PhaseControls({
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_14rem]">
         <Button disabled={!next || isSettingPhase} onClick={onAdvance}>
           {isSettingPhase ? <Loader2Icon data-icon="inline-start" className="animate-spin" /> : <StepForwardIcon data-icon="inline-start" />}
-          Advance Phase
+          推進階段
         </Button>
         <Button
           variant="outline"
@@ -542,7 +542,7 @@ function PhaseControls({
           onClick={onScore}
         >
           {isScoring ? <Loader2Icon data-icon="inline-start" className="animate-spin" /> : <TrophyIcon data-icon="inline-start" />}
-          Score Round
+          回合計分
         </Button>
       </div>
       <PhaseTimeline phase={snapshot.state.phase} />
@@ -557,10 +557,10 @@ function PhaseTimeline({ phase }: { phase: GamePhase }) {
     <div className="grid gap-2 sm:grid-cols-4">
       {phases.map((item, index) => (
         <div key={item} className="rounded-[1rem] border-2 border-ink bg-surface-raised p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]">
-          <div className="text-sm font-black text-muted-foreground">Step {index + 1}</div>
+          <div className="text-sm font-black text-muted-foreground">步驟 {index + 1}</div>
           <div className="font-black">{phaseLabel(item)}</div>
           <Badge className="mt-2" variant={index === currentIndex ? "secondary" : index < currentIndex ? "outline" : "outline"}>
-            {index === currentIndex ? "Current" : index < currentIndex ? "Done" : "Pending"}
+            {index === currentIndex ? "目前" : index < currentIndex ? "完成" : "待處理"}
           </Badge>
         </div>
       ))}
@@ -616,10 +616,10 @@ function BlackboardControlPanel({
   const blackboardOutputLabel = mode === "stream"
     ? selectedStreamSession
       ? `${teamNameById.get(selectedStreamSession.team_id) ?? selectedStreamSession.team_id.slice(0, 8)} ${selectedStreamSession.label}`
-      : "Live stream"
+      : "即時串流"
     : blackboardSubmission
       ? `${teamNameById.get(blackboardSubmission.team_id) ?? blackboardSubmission.team_id.slice(0, 8)} #${blackboardSubmission.attempt_no}`
-      : "Submission counts"
+      : "提交統計"
   const sessionsByTeam = useMemo(() => {
     const grouped = new Map<string, BlackboardStreamSession[]>()
     for (const session of streamSessions) {
@@ -643,26 +643,26 @@ function BlackboardControlPanel({
       <CardHeader className="border-b">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <CardTitle>Blackboard Controls</CardTitle>
-            <CardDescription>Choose exactly what appears on the public blackboard.</CardDescription>
+            <CardTitle>黑板控制</CardTitle>
+            <CardDescription>選擇公開黑板上要顯示的內容。</CardDescription>
           </div>
           <Button variant="outline" onClick={onRefresh}>
             <RefreshCwIcon data-icon="inline-start" />
-            Refresh
+            重新整理
           </Button>
         </div>
       </CardHeader>
       <CardContent className="grid gap-4 pt-4">
         <div className="grid gap-3 rounded-[1rem] border-2 border-ink bg-surface-raised p-4 shadow-[3px_3px_0_rgba(23,35,58,0.12)] md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
           <div className="min-w-0">
-            <div className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground">Public board output</div>
+            <div className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground">公開黑板顯示內容</div>
             <div className="mt-1 truncate text-xl font-black">{blackboardOutputLabel}</div>
             <div className="mt-1 text-sm font-semibold text-muted-foreground">
-              {phaseLabel(snapshot.state.phase)} / {snapshot.challenge?.title ?? "No active challenge"} / {formatTimerValue(snapshot.state.phase_ends_at, snapshot.state.server_now)}
+              {phaseLabel(snapshot.state.phase)} / {snapshot.challenge?.title ?? "目前沒有進行中的挑戰題目"} / {formatTimerValue(snapshot.state.phase_ends_at, snapshot.state.server_now)}
             </div>
           </div>
           <Badge variant={mode === "stream" ? "secondary" : "outline"} className="w-fit font-black">
-            {mode === "stream" ? "Live Stream" : blackboardSubmission ? "Submission Replay" : "Counts"}
+            {mode === "stream" ? "即時串流" : blackboardSubmission ? "提交重播" : "統計"}
           </Badge>
         </div>
         <Tabs
@@ -676,16 +676,16 @@ function BlackboardControlPanel({
           <TabsList className="w-full flex-wrap justify-start">
             <TabsTrigger value="stream">
               <ScreenShareIcon data-icon="inline-start" />
-              Live Streams
+              即時串流
             </TabsTrigger>
             <TabsTrigger value="submission">
               <PlayIcon data-icon="inline-start" />
-              Submissions
+              提交作品
             </TabsTrigger>
           </TabsList>
           <TabsContent value="stream" className="mt-4">
             {sessionsByTeam.length === 0 ? (
-              <EmptyPanel title="No stream sessions" description="Team stations appear here after students allow screen streaming." />
+              <EmptyPanel title="沒有串流工作階段" description="隊伍開啟螢幕串流後，隊伍工作站會顯示在這裡。" />
             ) : (
               <Tabs
                 value={selectedStreamTeamId ?? undefined}
@@ -781,7 +781,7 @@ function StreamSessionCard({
         </div>
         <Badge variant={session.connected ? "secondary" : "outline"} className="font-black">
           {session.connected ? <WifiIcon data-icon="inline-start" /> : <WifiOffIcon data-icon="inline-start" />}
-          {session.connected ? "Live" : "Offline"}
+          {session.connected ? "即時" : "離線"}
         </Badge>
       </div>
       <StreamSessionThumbnail
@@ -792,13 +792,13 @@ function StreamSessionCard({
         statusLabel={thumbnailStatusLabel(previewEnabled && session.connected, previewVisible, previewStatus)}
       />
       <div className="grid grid-cols-3 gap-2 text-center">
-        <ReplayStat label="target" value={previewTargetFps ? `${previewTargetFps} fps` : "2 fps"} />
-        <ReplayStat label="video" value={previewFps ? Math.round(previewFps) : "-"} />
-        <ReplayStat label="seen" value={formatSubmissionTime(session.last_seen_at)} />
+        <ReplayStat label="目標 FPS" value={previewTargetFps ? `${previewTargetFps} fps` : "2 fps"} />
+        <ReplayStat label="目前 FPS" value={previewFps ? Math.round(previewFps) : "-"} />
+        <ReplayStat label="最後更新" value={formatSubmissionTime(session.last_seen_at)} />
       </div>
       <Button disabled={isPending || !session.connected} onClick={onSelect}>
         {isPending && selected ? <Loader2Icon data-icon="inline-start" className="animate-spin" /> : <ScreenShareIcon data-icon="inline-start" />}
-        {selected ? "On Blackboard" : "Stream on Blackboard"}
+        {selected ? "正在黑板上" : "串流到黑板"}
       </Button>
     </article>
   )
@@ -874,12 +874,12 @@ function useElementVisible(ref: RefObject<Element | null>) {
 }
 
 function thumbnailStatusLabel(enabled: boolean, isVisible: boolean, status: string) {
-  if (!enabled) return "Stream offline"
-  if (!isVisible) return "Preview paused"
-  if (status === "unsupported") return "WebRTC unsupported"
-  if (status === "error") return "Preview unavailable"
-  if (status === "connecting") return "Connecting preview"
-  return "Waiting for preview"
+  if (!enabled) return "串流離線"
+  if (!isVisible) return "預覽已暫停"
+  if (status === "unsupported") return "WebRTC 不支援"
+  if (status === "error") return "預覽無法使用"
+  if (status === "connecting") return "正在連線預覽"
+  return "等待預覽"
 }
 
 function LiveRoundMonitor({
@@ -900,22 +900,22 @@ function LiveRoundMonitor({
       <CardHeader className="border-b">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <CardTitle>Live Round Monitor</CardTitle>
-            <CardDescription>Read-only nominations, public votes, results, and leaderboard context.</CardDescription>
+            <CardTitle>即時回合監控</CardTitle>
+            <CardDescription>檢視提名、公開投票、結果與排行榜資訊。</CardDescription>
           </div>
           <Button variant="outline" onClick={onRefresh}>
             <RefreshCwIcon data-icon="inline-start" />
-            Refresh
+            重新整理
           </Button>
         </div>
       </CardHeader>
       <CardContent className="pt-4">
         <Tabs key={defaultTab} defaultValue={defaultTab}>
           <TabsList className="w-full flex-wrap justify-start">
-            <TabsTrigger value="nominations">Nominations</TabsTrigger>
-            <TabsTrigger value="votes">Votes</TabsTrigger>
-            <TabsTrigger value="results">Results</TabsTrigger>
-            <TabsTrigger value="leaderboard">Leaderboard</TabsTrigger>
+            <TabsTrigger value="nominations">提名</TabsTrigger>
+            <TabsTrigger value="votes">票數</TabsTrigger>
+            <TabsTrigger value="results">結果</TabsTrigger>
+            <TabsTrigger value="leaderboard">排行榜</TabsTrigger>
           </TabsList>
           <TabsContent value="nominations" className="mt-4">
             <NominationGrid snapshot={snapshot} teamNameById={teamNameById} />
@@ -977,8 +977,8 @@ function SubmissionReplayDeck({
   if (submissions.length === 0) {
     return (
       <EmptyPanel
-        title="No submissions yet"
-        description="As teams submit drawings, this becomes the live replay deck for the classroom blackboard."
+        title="尚未有提交作品"
+        description="隊伍提交繪圖後，這裡會成為教室黑板的重播區。"
       />
     )
   }
@@ -991,16 +991,16 @@ function SubmissionReplayDeck({
       <section className="overflow-hidden rounded-[1.25rem] border-2 border-ink bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.18),transparent_34%),linear-gradient(135deg,hsl(var(--surface-raised)),hsl(var(--card)))] shadow-[4px_4px_0_rgba(23,35,58,0.14)]">
         <div className="flex flex-col gap-3 border-b-2 border-ink bg-card/90 p-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <div className="text-sm font-black uppercase tracking-[0.22em] text-muted-foreground">Blackboard Replay Deck</div>
-            <h2 className="mt-1 truncate text-2xl font-black">Pick the next crowd moment</h2>
+            <div className="text-sm font-black uppercase tracking-[0.22em] text-muted-foreground">黑板重播區</div>
+            <h2 className="mt-1 truncate text-2xl font-black">選擇下一個全場焦點</h2>
             <p className="mt-1 text-sm font-semibold text-muted-foreground">
-              Only the played submission appears on the public board during Submission Open.
+              在提交開放階段，只有播放的提交作品會顯示在公開黑板上。
             </p>
           </div>
           <div className="grid grid-cols-3 gap-2 text-center sm:min-w-72">
-            <ReplayStat label="total" value={submissions.length} />
-            <ReplayStat label="ready" value={completedCount} />
-            <ReplayStat label="teams" value={`${activeTeamCount}/${enabledTeamCount}`} />
+            <ReplayStat label="總數" value={submissions.length} />
+            <ReplayStat label="可播放" value={completedCount} />
+            <ReplayStat label="隊伍" value={`${activeTeamCount}/${enabledTeamCount}`} />
           </div>
         </div>
 
@@ -1010,7 +1010,7 @@ function SubmissionReplayDeck({
               <SubmissionPreview
                 submission={selectedSubmission}
                 challenge={snapshot.challenge}
-                title={`${teamNameById.get(selectedSubmission.team_id) ?? "Team"} #${selectedSubmission.attempt_no}`}
+                title={`${teamNameById.get(selectedSubmission.team_id) ?? "隊伍"} #${selectedSubmission.attempt_no}`}
                 sourceLabel={submissionStatusLabel(selectedSubmission)}
                 className="h-[26rem]"
                 viewportClassName="h-[calc(100%-4.5rem)]"
@@ -1020,43 +1020,43 @@ function SubmissionReplayDeck({
               />
             ) : (
               <EmptyPanel
-                title="No submission selected"
-                description="The public blackboard stays on team submission counts until a completed submission is played."
+                title="尚未選擇提交作品"
+                description="在播放完成的提交作品之前，公開黑板會維持顯示隊伍提交統計。"
               />
             )}
           </div>
           <aside className="grid content-between gap-3 rounded-[1rem] border-2 border-ink bg-background/80 p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]">
             <div className="grid gap-3">
               <div>
-                <div className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground">Preview</div>
+                <div className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground">預覽</div>
                 <div className="mt-1 text-xl font-black">
-                  {selectedSubmission ? teamNameById.get(selectedSubmission.team_id) ?? selectedSubmission.team_id.slice(0, 8) : "None"}
+                  {selectedSubmission ? teamNameById.get(selectedSubmission.team_id) ?? selectedSubmission.team_id.slice(0, 8) : "無"}
                 </div>
                 <div className="mt-1 text-sm font-semibold text-muted-foreground">
-                  {selectedSubmission ? `Attempt #${selectedSubmission.attempt_no} / ${formatSubmissionTime(selectedSubmission.created_at)}` : "Choose a drawing"}
+                  {selectedSubmission ? `第 ${selectedSubmission.attempt_no} 次嘗試 / ${formatSubmissionTime(selectedSubmission.created_at)}` : "選擇一張繪圖"}
                 </div>
               </div>
               {selectedSubmission ? (
                 <div className="grid gap-2">
                   <Badge variant={selectedCanPlay ? "secondary" : "outline"} className="w-fit font-black">
-                    {selectedCanPlay ? "Ready to play" : submissionStatusLabel(selectedSubmission)}
+                    {selectedCanPlay ? "可播放" : submissionStatusLabel(selectedSubmission)}
                   </Badge>
                   <div className="text-sm font-semibold text-muted-foreground">
                     {selectedCanPlay
-                      ? "Sends this trace to the public blackboard spotlight."
-                      : "Replay unlocks after the judge finishes the trace."}
+                      ? "將這段軌跡送到公開黑板焦點區。"
+                      : "軌跡處理完成後即可播放重播。"}
                   </div>
                 </div>
               ) : null}
               <div className="rounded-[0.875rem] border border-border bg-card/80 px-3 py-3">
-                <div className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground">Public board</div>
+                <div className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground">公開黑板</div>
                 <div className="mt-1 truncate font-black">
                   {blackboardSubmission
                     ? `${teamNameById.get(blackboardSubmission.team_id) ?? blackboardSubmission.team_id.slice(0, 8)} #${blackboardSubmission.attempt_no}`
-                    : "Submission counts"}
+                    : "提交統計"}
                 </div>
                 <div className="mt-1 text-xs font-bold text-muted-foreground">
-                  {mode === "stream" ? "Live stream is currently active" : blackboardSubmission ? "Replay is currently active" : "Default counts are live"}
+                  {mode === "stream" ? "目前正在顯示即時串流" : blackboardSubmission ? "目前正在播放重播" : "正在顯示預設統計"}
                 </div>
               </div>
             </div>
@@ -1071,7 +1071,7 @@ function SubmissionReplayDeck({
                 ) : (
                   <PlayIcon data-icon="inline-start" />
                 )}
-                Play on Blackboard
+                播放至黑板
               </Button>
               <Button
                 variant="outline"
@@ -1083,7 +1083,7 @@ function SubmissionReplayDeck({
                 ) : (
                   <XIcon data-icon="inline-start" />
                 )}
-                Clear to Counts
+                清除並顯示統計
               </Button>
             </div>
           </aside>
@@ -1093,8 +1093,8 @@ function SubmissionReplayDeck({
       <section className="rounded-[1.25rem] border-2 border-ink bg-surface-raised p-3 shadow-[4px_4px_0_rgba(23,35,58,0.12)]">
         <div className="mb-3 flex items-center justify-between gap-3 px-1">
           <div>
-            <h3 className="font-black">Recent submissions</h3>
-            <p className="text-sm font-semibold text-muted-foreground">Newest first. Click any card to cue it.</p>
+            <h3 className="font-black">近期提交作品</h3>
+            <p className="text-sm font-semibold text-muted-foreground">最新優先。點選任一卡片即可準備播放。</p>
           </div>
           <Badge variant="outline" className="font-mono font-black">{submissions.length}</Badge>
         </div>
@@ -1150,11 +1150,11 @@ function SubmissionReplayCard({
         <div className="min-w-0">
           <div className="truncate font-black">{teamName}</div>
           <div className="text-sm font-semibold text-muted-foreground">
-            Attempt #{submission.attempt_no} / {formatSubmissionTime(submission.created_at)}
+            第 {submission.attempt_no} 次嘗試 / {formatSubmissionTime(submission.created_at)}
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
-          {onBoard ? <Badge className="font-black">On board</Badge> : null}
+          {onBoard ? <Badge className="font-black">黑板顯示中</Badge> : null}
           <Badge variant={submission.status === "completed" ? "secondary" : "outline"} className="font-black">
             {submissionStatusLabel(submission)}
           </Badge>
@@ -1164,12 +1164,12 @@ function SubmissionReplayCard({
         {submission.result_image_url ? (
           <img
             src={submission.result_image_url}
-            alt={`${teamName} attempt ${submission.attempt_no}`}
+            alt={`${teamName} 第 ${submission.attempt_no} 次嘗試`}
             className="h-full w-full object-contain transition duration-200 group-hover:scale-[1.02]"
           />
         ) : (
           <div className="flex h-full items-center justify-center px-4 text-center text-sm font-semibold text-muted-foreground">
-            {submission.error_message ?? "Trace is being prepared"}
+            {submission.error_message ?? "正在準備軌跡"}
           </div>
         )}
       </div>
@@ -1180,7 +1180,7 @@ function SubmissionReplayCard({
 function NominationGrid({ snapshot, teamNameById }: { snapshot: GameStateResponse; teamNameById: Map<string, string> }) {
   const submissionsById = new Map(snapshot.round_submissions.map((submission) => [submission.id, submission]))
 
-  if (snapshot.nominations.length === 0) return <EmptyPanel title="No nominations" description="Nominations appear after team selection votes are recorded." />
+  if (snapshot.nominations.length === 0) return <EmptyPanel title="尚未有提名" description="各隊選出代表作品後，提名會顯示在這裡。" />
 
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -1190,7 +1190,7 @@ function NominationGrid({ snapshot, teamNameById }: { snapshot: GameStateRespons
           <div key={nomination.team_id} className="grid gap-3 rounded-md border p-3">
             <div className="flex items-center justify-between gap-3">
               <div className="truncate font-medium">{teamNameById.get(nomination.team_id) ?? nomination.team_id.slice(0, 8)}</div>
-              <Badge variant="outline">{nomination.vote_count} team votes</Badge>
+              <Badge variant="outline">{nomination.vote_count} 張隊伍票</Badge>
             </div>
             <SubmissionPreview submission={submission} />
           </div>
@@ -1208,7 +1208,7 @@ function VoteGrid({ snapshot, teamNameById }: { snapshot: GameStateResponse; tea
     votes: snapshot.public_vote_counts.find((count) => count.target_submission_id === nomination.submission_id)?.vote_count ?? 0,
   }))
 
-  if (nominations.length === 0) return <EmptyPanel title="No public vote targets" description="Representative drawings appear here in public voting." />
+  if (nominations.length === 0) return <EmptyPanel title="尚未有公開投票目標" description="進入公開投票時，代表繪圖會顯示在這裡。" />
 
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -1216,7 +1216,7 @@ function VoteGrid({ snapshot, teamNameById }: { snapshot: GameStateResponse; tea
         <div key={nomination.team_id} className="grid gap-3 rounded-md border p-3">
           <div className="flex items-center justify-between gap-3">
             <div className="truncate font-medium">{teamNameById.get(nomination.team_id) ?? nomination.team_id.slice(0, 8)}</div>
-            <Badge variant="secondary">{votes} votes</Badge>
+            <Badge variant="secondary">{votes} 票</Badge>
           </div>
           <SubmissionPreview submission={submission} />
         </div>
@@ -1228,7 +1228,7 @@ function VoteGrid({ snapshot, teamNameById }: { snapshot: GameStateResponse; tea
 function ResultGrid({ snapshot, teamNameById }: { snapshot: GameStateResponse; teamNameById: Map<string, string> }) {
   const submissionsById = new Map(snapshot.round_submissions.map((submission) => [submission.id, submission]))
 
-  if (snapshot.results.length === 0) return <EmptyPanel title="No results" description="Results appear after scoring the round." />
+  if (snapshot.results.length === 0) return <EmptyPanel title="尚未有結果" description="回合計分後，結果會顯示在這裡。" />
 
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -1273,7 +1273,7 @@ function SubmissionPreview({
   showTurtle?: boolean
 }) {
   if (!submission) {
-    return <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">Submission unavailable</div>
+    return <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">提交作品無法使用</div>
   }
 
   return (
@@ -1295,7 +1295,7 @@ function SubmissionPreview({
 }
 
 function LeaderboardList({ leaderboard }: { leaderboard: LeaderboardEntry[] }) {
-  if (leaderboard.length === 0) return <EmptyPanel title="No leaderboard" description="Scores appear after teams receive points." />
+  if (leaderboard.length === 0) return <EmptyPanel title="尚未有排行榜" description="隊伍獲得分數後，分數會顯示在這裡。" />
 
   return (
     <div className="grid gap-2">
@@ -1303,7 +1303,7 @@ function LeaderboardList({ leaderboard }: { leaderboard: LeaderboardEntry[] }) {
         <div key={team.team_id} className="flex items-center justify-between gap-3 rounded-md border p-3">
           <div className="min-w-0">
             <div className="truncate font-medium">#{team.rank} {team.team_name}</div>
-            <div className="text-sm text-muted-foreground">solved {team.solved_count}</div>
+            <div className="text-sm text-muted-foreground">完成題數 {team.solved_count}</div>
           </div>
           <div className="font-mono text-xl font-semibold tabular-nums">{team.total_score}</div>
         </div>
@@ -1360,12 +1360,12 @@ function monitorDefaultTab(phase: GamePhase) {
 
 function phaseLabel(phase: GamePhase) {
   const labels: Record<GamePhase, string> = {
-    idle: "Idle",
-    submission_open: "Submission Open",
-    team_selection: "Team Selection",
-    public_voting: "Public Voting",
-    scoring: "Scoring",
-    round_complete: "Round Complete",
+    idle: "閒置",
+    submission_open: "開放提交",
+    team_selection: "隊內選拔",
+    public_voting: "公開投票",
+    scoring: "計分中",
+    round_complete: "回合完成",
   }
   return labels[phase]
 }
@@ -1404,10 +1404,10 @@ function compareSubmissionRecency(left: GameSubmission, right: GameSubmission) {
 }
 
 function submissionStatusLabel(submission: GameSubmission) {
-  if (submission.status === "completed") return "completed"
-  if (submission.status === "failed") return "failed"
-  if (submission.status === "running") return "running"
-  if (submission.status === "queued") return "queued"
+  if (submission.status === "completed") return "已完成"
+  if (submission.status === "failed") return "失敗"
+  if (submission.status === "running") return "執行中"
+  if (submission.status === "queued") return "排隊中"
   return submission.status
 }
 

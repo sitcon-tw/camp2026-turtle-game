@@ -48,33 +48,33 @@ export default function AdminLoginPage() {
             <div className="mx-auto mb-2 flex size-12 items-center justify-center rounded-[1rem] border-2 border-ink bg-primary text-primary-foreground shadow-[2px_2px_0_rgba(23,35,58,0.16)]">
               <TurtleIcon className="size-6" />
             </div>
-            <CardTitle className="text-2xl">Admin sign in</CardTitle>
-            <CardDescription>Use the admin password to open the command center.</CardDescription>
+            <CardTitle className="text-2xl">管理員登入</CardTitle>
+            <CardDescription>使用管理員密碼開啟指揮中心。</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit}>
               <FieldGroup>
                 <Field data-invalid={Boolean(error)}>
-                  <FieldLabel htmlFor="admin-password">Admin password</FieldLabel>
+                  <FieldLabel htmlFor="admin-password">管理員密碼</FieldLabel>
                   <Input
                     id="admin-password"
                     type="password"
                     autoComplete="current-password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
-                    placeholder="Enter password"
+                    placeholder="輸入密碼"
                     aria-invalid={Boolean(error)}
                     disabled={submitting}
                     required
                   />
-                  {error ? <FieldError>{error}</FieldError> : <FieldDescription>Session tokens are stored locally in this browser.</FieldDescription>}
+                  {error ? <FieldError>{error}</FieldError> : <FieldDescription>登入狀態會儲存在這台瀏覽器本機。</FieldDescription>}
                 </Field>
                 <Button type="submit" size="lg" disabled={submitting || !password}>
                   {submitting ? <Loader2Icon className="animate-spin" /> : <LockKeyholeIcon />}
-                  Sign in
+                  登入
                 </Button>
                 <Button type="button" variant="ghost" nativeButton={false} render={<Link to="/" />}>
-                  <ArrowLeftIcon /> Back to game
+                  <ArrowLeftIcon /> 返回遊戲
                 </Button>
               </FieldGroup>
             </form>

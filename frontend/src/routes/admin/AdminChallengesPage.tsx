@@ -114,7 +114,13 @@ function statusVariant(status: ChallengeSet["status"]) {
 }
 
 function setLabel(set: ChallengeSet | undefined) {
-  return set ? `${set.name} (${set.version})` : "Unknown set"
+  return set ? `${set.name}（${set.version}）` : "未知題組"
+}
+
+function statusLabel(status: ChallengeSet["status"]) {
+  if (status === "active") return "啟用中"
+  if (status === "archived") return "已封存"
+  return "草稿"
 }
 
 function sortedChallenges(challenges: Challenge[]) {
@@ -214,7 +220,7 @@ export default function AdminChallengesPage() {
   const createSet = useMutation({
     mutationFn: adminApi.createChallengeSet,
     onSuccess: (set) => {
-      toast.success(`Created ${set.name}`)
+      toast.success(`已建立 ${set.name}`)
       setSelectedSetId(set.id)
       setSetForm({ name: "", version: "" })
       setSetCreateOpen(false)
@@ -226,7 +232,7 @@ export default function AdminChallengesPage() {
   const importSet = useMutation({
     mutationFn: adminApi.importChallengeSet,
     onSuccess: (set) => {
-      toast.success(`Imported ${set.name}`)
+      toast.success(`已匯入 ${set.name}`)
       setSelectedSetId(set.id)
       setImportFile(null)
       if (importInputRef.current) importInputRef.current.value = ""
@@ -239,7 +245,7 @@ export default function AdminChallengesPage() {
   const activateSet = useMutation({
     mutationFn: adminApi.activateChallengeSet,
     onSuccess: (set) => {
-      toast.success(`Activated ${set.name}`)
+      toast.success(`已啟用 ${set.name}`)
       setSelectedSetId(set.id)
       invalidateChallengeData()
     },
@@ -249,7 +255,7 @@ export default function AdminChallengesPage() {
   const archiveSet = useMutation({
     mutationFn: adminApi.archiveChallengeSet,
     onSuccess: (set) => {
-      toast.success(`Archived ${set.name}`)
+      toast.success(`已封存 ${set.name}`)
       invalidateChallengeData()
     },
     onError: (error) => toast.error(errorMessage(error)),
@@ -262,7 +268,7 @@ export default function AdminChallengesPage() {
     }),
     onSuccess: ({ blob, set }) => {
       downloadBlob(blob, exportFileName(set))
-      toast.success(`Exported ${set.name}`)
+      toast.success(`已匯出 ${set.name}`)
     },
     onError: (error) => toast.error(errorMessage(error)),
   })
@@ -276,9 +282,9 @@ export default function AdminChallengesPage() {
         points: Number(form.points),
         enabled: form.enabled,
         order: Number(form.order),
-      }),
+    }),
     onSuccess: (challenge) => {
-      toast.success(`Created ${challenge.title}`)
+      toast.success(`已建立 ${challenge.title}`)
       setSelectedSetId(challenge.challenge_set_id)
       setCreateForm(emptyChallengeForm)
       setChallengeCreateOpen(false)
@@ -295,9 +301,9 @@ export default function AdminChallengesPage() {
         points: Number(form.points),
         enabled: form.enabled,
         order: Number(form.order),
-      }),
+    }),
     onSuccess: (challenge) => {
-      toast.success(`Updated ${challenge.title}`)
+      toast.success(`已更新 ${challenge.title}`)
       setEditingChallenge(null)
       setChallengeEditOpen(false)
       invalidateChallengeData()
@@ -308,7 +314,7 @@ export default function AdminChallengesPage() {
   const disableChallenge = useMutation({
     mutationFn: adminApi.disableChallenge,
     onSuccess: (challenge) => {
-      toast.success(`Disabled ${challenge.title}`)
+      toast.success(`已停用 ${challenge.title}`)
       invalidateChallengeData()
     },
     onError: (error) => toast.error(errorMessage(error)),
@@ -318,7 +324,7 @@ export default function AdminChallengesPage() {
     mutationFn: ({ challenge, file }: { challenge: Challenge; file: File }) =>
       adminApi.uploadChallengeTargetImage(challenge.id, file),
     onSuccess: (challenge) => {
-      toast.success(`Uploaded target for ${challenge.title}`)
+      toast.success(`已上傳 ${challenge.title} 的目標圖片`)
       setImageChallenge(null)
       setImageFile(null)
       if (imageInputRef.current) imageInputRef.current.value = ""
@@ -331,7 +337,7 @@ export default function AdminChallengesPage() {
   const reorderChallenges = useMutation({
     mutationFn: adminApi.reorderChallenges,
     onSuccess: () => {
-      toast.success("Challenge order updated")
+      toast.success("挑戰順序已更新")
       invalidateChallengeData()
     },
     onError: (error) => toast.error(errorMessage(error)),
@@ -348,7 +354,7 @@ export default function AdminChallengesPage() {
   function submitSetImport(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!importFile) {
-      toast.error("Choose a challenge set archive to import.")
+      toast.error("請選擇要匯入的挑戰題組壓縮檔。")
       return
     }
     importSet.mutate(importFile)
@@ -380,7 +386,7 @@ export default function AdminChallengesPage() {
     event.preventDefault()
     const challengeSetId = createForm.challenge_set_id || defaultCreateSetId
     if (!challengeSetId) {
-      toast.error("Select or create a challenge set first.")
+      toast.error("請先選擇或建立挑戰題組。")
       return
     }
     createChallenge.mutate({ ...createForm, challenge_set_id: challengeSetId })
@@ -395,7 +401,7 @@ export default function AdminChallengesPage() {
   function submitImage(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!imageChallenge || !imageFile) {
-      toast.error("Choose an image file to upload.")
+      toast.error("請選擇要上傳的圖片檔案。")
       return
     }
     uploadImage.mutate({ challenge: imageChallenge, file: imageFile })
@@ -403,7 +409,7 @@ export default function AdminChallengesPage() {
 
   function moveChallenge(index: number, direction: -1 | 1) {
     if (!canReorder) {
-      toast.error("Clear filters before changing challenge order.")
+      toast.error("請先清除篩選條件，再變更挑戰順序。")
       return
     }
     const nextIndex = index + direction
@@ -425,9 +431,9 @@ export default function AdminChallengesPage() {
     <div className="grid gap-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">Challenges</h1>
+          <h1 className="font-heading text-2xl font-semibold tracking-tight">挑戰管理</h1>
           <p className="text-sm text-muted-foreground">
-            Manage challenge sets and the challenge content used by live rounds.
+            管理即時回合使用的挑戰題組與挑戰內容。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -444,11 +450,11 @@ export default function AdminChallengesPage() {
             ) : (
               <RefreshCwIcon data-icon="inline-start" />
             )}
-            Refresh
+            重新整理
           </Button>
           <Button onClick={openCreateChallengeDialog} disabled={!selectedSet}>
             <PlusIcon data-icon="inline-start" />
-            New challenge
+            新增挑戰
           </Button>
         </div>
       </div>
@@ -484,13 +490,13 @@ export default function AdminChallengesPage() {
                 <div className="min-w-0">
                   <CardTitle className="flex items-center gap-2">
                     <ListChecksIcon />
-                    Challenges in selected set
+                    所選題組的挑戰題目
                   </CardTitle>
                   <CardDescription>
                     {selectedSet
-                      ? `${visibleChallenges.length} of ${orderedChallenges.length} challenges visible`
-                      : "Select or create a challenge set to manage its challenges."}
-                    {selectedSet && !canReorder ? " Clear filters to reorder." : ""}
+                      ? `顯示 ${visibleChallenges.length} / ${orderedChallenges.length} 個挑戰`
+                      : "請選擇或建立挑戰題組以管理挑戰。"}
+                    {selectedSet && !canReorder ? " 清除篩選條件後即可調整順序。" : ""}
                   </CardDescription>
                 </div>
                 <ChallengeListToolbar
@@ -530,23 +536,23 @@ export default function AdminChallengesPage() {
       <Dialog open={setCreateOpen} onOpenChange={setSetCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create challenge set</DialogTitle>
-            <DialogDescription>Add a draft set before creating or importing challenge content.</DialogDescription>
+            <DialogTitle>建立挑戰題組</DialogTitle>
+            <DialogDescription>建立草稿題組後，即可新增挑戰內容；也可從匯出檔匯入題組。</DialogDescription>
           </DialogHeader>
           <form onSubmit={submitSetCreate}>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="challenge-set-name">Name</FieldLabel>
+                <FieldLabel htmlFor="challenge-set-name">名稱</FieldLabel>
                 <Input
                   id="challenge-set-name"
                   required
                   value={setForm.name}
                   onChange={(event) => setSetForm((form) => ({ ...form, name: event.target.value }))}
-                  placeholder="Spring finals"
+                  placeholder="春季決賽"
                 />
               </Field>
               <Field>
-                <FieldLabel htmlFor="challenge-set-version">Version</FieldLabel>
+                <FieldLabel htmlFor="challenge-set-version">版本</FieldLabel>
                 <Input
                   id="challenge-set-version"
                   required
@@ -557,10 +563,10 @@ export default function AdminChallengesPage() {
               </Field>
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setSetCreateOpen(false)}>
-                  Cancel
+                  取消
                 </Button>
                 <Button type="submit" disabled={createSet.isPending || !setForm.name.trim() || !setForm.version.trim()}>
-                  {createSet.isPending ? "Creating..." : "Create set"}
+                  {createSet.isPending ? "建立中..." : "建立題組"}
                 </Button>
               </DialogFooter>
             </FieldGroup>
@@ -571,13 +577,13 @@ export default function AdminChallengesPage() {
       <Dialog open={setImportOpen} onOpenChange={setSetImportOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Import challenge set</DialogTitle>
-            <DialogDescription>Upload a challenge set zip exported from this system.</DialogDescription>
+            <DialogTitle>匯入挑戰題組</DialogTitle>
+            <DialogDescription>上傳由此系統匯出的挑戰題組 ZIP 檔。</DialogDescription>
           </DialogHeader>
           <form onSubmit={submitSetImport}>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="challenge-set-import">Archive</FieldLabel>
+                <FieldLabel htmlFor="challenge-set-import">壓縮檔</FieldLabel>
                 <Input
                   id="challenge-set-import"
                   ref={importInputRef}
@@ -588,10 +594,10 @@ export default function AdminChallengesPage() {
               </Field>
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setSetImportOpen(false)}>
-                  Cancel
+                  取消
                 </Button>
                 <Button type="submit" disabled={importSet.isPending || !importFile}>
-                  {importSet.isPending ? "Importing..." : "Import set"}
+                  {importSet.isPending ? "匯入中..." : "匯入題組"}
                 </Button>
               </DialogFooter>
             </FieldGroup>
@@ -602,8 +608,8 @@ export default function AdminChallengesPage() {
       <Dialog open={challengeCreateOpen} onOpenChange={setChallengeCreateOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Create challenge</DialogTitle>
-            <DialogDescription>Add a challenge to a draft or active challenge set.</DialogDescription>
+            <DialogTitle>建立挑戰</DialogTitle>
+            <DialogDescription>將挑戰加入草稿或啟用中的挑戰題組。</DialogDescription>
           </DialogHeader>
           <ChallengeFormFields
             form={createForm}
@@ -621,8 +627,8 @@ export default function AdminChallengesPage() {
       <Dialog open={challengeEditOpen} onOpenChange={setChallengeEditOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Edit challenge</DialogTitle>
-            <DialogDescription>Update scoring, copy, threshold, enabled state, or display order.</DialogDescription>
+            <DialogTitle>編輯挑戰</DialogTitle>
+            <DialogDescription>更新分數、文案、啟用狀態或顯示順序。</DialogDescription>
           </DialogHeader>
           <ChallengeFormFields
             form={editForm}
@@ -640,15 +646,15 @@ export default function AdminChallengesPage() {
       <Dialog open={imageOpen} onOpenChange={setImageOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Upload target image</DialogTitle>
+            <DialogTitle>上傳目標圖片</DialogTitle>
             <DialogDescription>
-              Replace the target image for {imageChallenge?.title ?? "this challenge"}.
+              替換「{imageChallenge?.title ?? "此挑戰"}」的目標圖片。
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={submitImage}>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="challenge-image">Image file</FieldLabel>
+                <FieldLabel htmlFor="challenge-image">圖片檔案</FieldLabel>
                 <Input
                   id="challenge-image"
                   ref={imageInputRef}
@@ -659,10 +665,10 @@ export default function AdminChallengesPage() {
               </Field>
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setImageOpen(false)}>
-                  Cancel
+                  取消
                 </Button>
                 <Button type="submit" disabled={uploadImage.isPending || !imageFile}>
-                  {uploadImage.isPending ? "Uploading..." : "Upload image"}
+                  {uploadImage.isPending ? "上傳中..." : "上傳圖片"}
                 </Button>
               </DialogFooter>
             </FieldGroup>
@@ -695,17 +701,17 @@ function ChallengeSetRail({
   return (
     <Card className="xl:sticky xl:top-20 xl:self-start">
       <CardHeader className="border-b">
-        <CardTitle>Challenge sets</CardTitle>
-        <CardDescription>{sets.length} sets available</CardDescription>
+        <CardTitle>挑戰題組</CardTitle>
+        <CardDescription>共 {sets.length} 個題組</CardDescription>
         <CardAction>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={onImport}>
               <FileUpIcon data-icon="inline-start" />
-              Import
+              匯入
             </Button>
             <Button size="sm" onClick={onCreate}>
               <PlusIcon data-icon="inline-start" />
-              New
+              新增
             </Button>
           </div>
         </CardAction>
@@ -717,20 +723,20 @@ function ChallengeSetRail({
               <EmptyMedia variant="icon">
                 <Loader2Icon className="animate-spin" />
               </EmptyMedia>
-              <EmptyTitle>Loading challenge sets</EmptyTitle>
-              <EmptyDescription>Fetching the current set list.</EmptyDescription>
+              <EmptyTitle>正在載入挑戰題組</EmptyTitle>
+              <EmptyDescription>正在取得目前的題組清單。</EmptyDescription>
             </EmptyHeader>
           </Empty>
         ) : error ? (
           <Empty>
             <EmptyHeader>
-              <EmptyTitle>Challenge sets could not be loaded</EmptyTitle>
+              <EmptyTitle>無法載入挑戰題組</EmptyTitle>
               <EmptyDescription>{errorMessage(error)}</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
               <Button variant="outline" onClick={onRetry}>
                 <RefreshCwIcon data-icon="inline-start" />
-                Try again
+                重試
               </Button>
             </EmptyContent>
           </Empty>
@@ -740,13 +746,13 @@ function ChallengeSetRail({
               <EmptyMedia variant="icon">
                 <PlusIcon />
               </EmptyMedia>
-              <EmptyTitle>No challenge sets yet</EmptyTitle>
-              <EmptyDescription>Create a draft set or import one from an archive.</EmptyDescription>
+              <EmptyTitle>尚無挑戰題組</EmptyTitle>
+              <EmptyDescription>建立草稿題組，或從壓縮檔匯入題組。</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
               <Button onClick={onCreate}>
                 <PlusIcon data-icon="inline-start" />
-                Create challenge set
+                建立挑戰題組
               </Button>
             </EmptyContent>
           </Empty>
@@ -768,13 +774,13 @@ function ChallengeSetRail({
                   <span className="flex items-start justify-between gap-3">
                     <span className="min-w-0">
                       <span className="block truncate font-medium">{set.name}</span>
-                      <span className="block truncate text-xs text-muted-foreground">Version {set.version}</span>
+                      <span className="block truncate text-xs text-muted-foreground">版本 {set.version}</span>
                     </span>
-                    <Badge variant={statusVariant(set.status)}>{set.status}</Badge>
+                    <Badge variant={statusVariant(set.status)}>{statusLabel(set.status)}</Badge>
                   </span>
                   <span className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                    <span>{set.challenge_count ?? 0} challenges</span>
-                    <span className="truncate">Updated {formatDate(set.updated_at)}</span>
+                    <span>{set.challenge_count ?? 0} 個挑戰</span>
+                    <span className="truncate">更新於 {formatDate(set.updated_at)}</span>
                   </span>
                 </button>
               )
@@ -816,9 +822,9 @@ function SelectedSetSummary({
               <EmptyMedia variant="icon">
                 <ArchiveIcon />
               </EmptyMedia>
-              <EmptyTitle>Select a challenge set</EmptyTitle>
+              <EmptyTitle>選擇挑戰題組</EmptyTitle>
               <EmptyDescription>
-                Challenge set actions and challenge content will appear together here.
+                挑戰題組操作與挑戰內容會顯示在這裡。
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
@@ -838,17 +844,17 @@ function SelectedSetSummary({
           <div className="min-w-0">
             <CardTitle className="flex flex-wrap items-center gap-2">
               {set.name}
-              <Badge variant={statusVariant(set.status)}>{set.status}</Badge>
+              <Badge variant={statusVariant(set.status)}>{statusLabel(set.status)}</Badge>
             </CardTitle>
             <CardDescription className="mt-1">
-              Version {set.version} · Updated {formatDate(set.updated_at)}
-              {activeSet && activeSet.id !== set.id ? ` · Active set is ${setLabel(activeSet)}` : ""}
+              版本 {set.version} · 更新於 {formatDate(set.updated_at)}
+              {activeSet && activeSet.id !== set.id ? ` · 目前啟用題組為 ${setLabel(activeSet)}` : ""}
             </CardDescription>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             <Button size="sm" variant="outline" onClick={() => onExport(set)} disabled={exportPending}>
               <DownloadIcon data-icon="inline-start" />
-              Export
+              匯出
             </Button>
             <Button
               size="sm"
@@ -857,19 +863,19 @@ function SelectedSetSummary({
               disabled={set.status === "active" || activatePending}
             >
               <PlayIcon data-icon="inline-start" />
-              Activate
+              啟用
             </Button>
             <ConfirmAction
-              title="Archive challenge set"
-              description={`${set.name} will no longer be available for active play.`}
-              confirmLabel="Archive"
+              title="封存挑戰題組"
+              description={`${set.name} 將無法用於新的即時回合。`}
+              confirmLabel="封存"
               destructive
               disabled={set.status === "archived" || archivePending}
               onConfirm={() => onArchive(set)}
             >
               <Button size="sm" variant="destructive" disabled={set.status === "archived" || archivePending}>
                 <ArchiveIcon data-icon="inline-start" />
-                Archive
+                封存
               </Button>
             </ConfirmAction>
           </div>
@@ -877,10 +883,10 @@ function SelectedSetSummary({
       </CardHeader>
       <CardContent>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <SetMetric label="Challenges" value={String(challenges.length)} />
-          <SetMetric label="Enabled" value={String(enabledCount)} />
-          <SetMetric label="Missing targets" value={String(missingTargetCount)} />
-          <SetMetric label="Total points" value={String(totalPoints)} />
+          <SetMetric label="挑戰數" value={String(challenges.length)} />
+          <SetMetric label="已啟用" value={String(enabledCount)} />
+          <SetMetric label="缺少目標圖片" value={String(missingTargetCount)} />
+          <SetMetric label="總分" value={String(totalPoints)} />
         </div>
       </CardContent>
     </Card>
@@ -912,15 +918,15 @@ function ChallengeListToolbar({
   onCreate: () => void
 }) {
   const enabledItems = [
-    { value: "all", label: "All challenges" },
-    { value: "enabled", label: "Enabled" },
-    { value: "disabled", label: "Disabled" },
+    { value: "all", label: "全部挑戰" },
+    { value: "enabled", label: "已啟用" },
+    { value: "disabled", label: "已停用" },
   ]
 
   return (
     <FieldGroup className="grid gap-3 sm:grid-cols-[10rem_minmax(12rem,1fr)_auto] lg:max-w-2xl">
       <Field>
-        <FieldLabel>Status</FieldLabel>
+        <FieldLabel>狀態</FieldLabel>
         <Select
           items={enabledItems}
           value={enabledFilter}
@@ -931,27 +937,27 @@ function ChallengeListToolbar({
           </SelectTrigger>
           <SelectContent>
             <SelectGroup>
-              <SelectItem value="all">All challenges</SelectItem>
-              <SelectItem value="enabled">Enabled</SelectItem>
-              <SelectItem value="disabled">Disabled</SelectItem>
+              <SelectItem value="all">全部挑戰</SelectItem>
+              <SelectItem value="enabled">已啟用</SelectItem>
+              <SelectItem value="disabled">已停用</SelectItem>
             </SelectGroup>
           </SelectContent>
         </Select>
       </Field>
       <Field>
-        <FieldLabel htmlFor="challenge-search">Search</FieldLabel>
+        <FieldLabel htmlFor="challenge-search">搜尋</FieldLabel>
         <Input
           id="challenge-search"
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
-          placeholder="Slug or title"
+          placeholder="識別碼或標題"
         />
       </Field>
       <Field className="justify-end">
-        <FieldLabel className="invisible">Create</FieldLabel>
+        <FieldLabel className="invisible">建立</FieldLabel>
         <Button onClick={onCreate} disabled={!canCreate}>
           <PlusIcon data-icon="inline-start" />
-          Challenge
+          挑戰
         </Button>
       </Field>
     </FieldGroup>
@@ -994,8 +1000,8 @@ function ChallengesTable({
           <EmptyMedia variant="icon">
             <Loader2Icon className="animate-spin" />
           </EmptyMedia>
-          <EmptyTitle>Loading challenges</EmptyTitle>
-          <EmptyDescription>Fetching challenge content.</EmptyDescription>
+          <EmptyTitle>正在載入挑戰</EmptyTitle>
+          <EmptyDescription>正在取得挑戰內容。</EmptyDescription>
         </EmptyHeader>
       </Empty>
     )
@@ -1005,13 +1011,13 @@ function ChallengesTable({
     return (
       <Empty>
         <EmptyHeader>
-          <EmptyTitle>Challenges could not be loaded</EmptyTitle>
+          <EmptyTitle>無法載入挑戰</EmptyTitle>
           <EmptyDescription>{errorMessage(error)}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
           <Button variant="outline" onClick={onRetry}>
             <RefreshCwIcon data-icon="inline-start" />
-            Try again
+            重試
           </Button>
         </EmptyContent>
       </Empty>
@@ -1025,15 +1031,15 @@ function ChallengesTable({
           <EmptyMedia variant="icon">
             <PlusIcon />
           </EmptyMedia>
-          <EmptyTitle>{canCreate ? "No challenges match" : "No challenge set selected"}</EmptyTitle>
+          <EmptyTitle>{canCreate ? "沒有符合條件的挑戰" : "尚未選擇挑戰題組"}</EmptyTitle>
           <EmptyDescription>
-            {canCreate ? "Create a challenge or change the current filters." : "Select or create a set first."}
+            {canCreate ? "請建立挑戰或調整目前的篩選條件。" : "請先選擇或建立題組。"}
           </EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
           <Button onClick={onCreate} disabled={!canCreate}>
             <PlusIcon data-icon="inline-start" />
-            Create challenge
+            建立挑戰
           </Button>
         </EmptyContent>
       </Empty>
@@ -1044,12 +1050,12 @@ function ChallengesTable({
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Order</TableHead>
-          <TableHead>Challenge</TableHead>
-          <TableHead className="text-right">Points</TableHead>
-          <TableHead>Target</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead className="text-right">Actions</TableHead>
+          <TableHead>順序</TableHead>
+          <TableHead>挑戰</TableHead>
+          <TableHead className="text-right">分數</TableHead>
+          <TableHead>目標圖片</TableHead>
+          <TableHead>狀態</TableHead>
+          <TableHead className="text-right">操作</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -1065,14 +1071,14 @@ function ChallengesTable({
             <TableCell className="text-right font-medium">{challenge.points}</TableCell>
             <TableCell>
               {challenge.target_image_asset_id ? (
-                <Badge variant="secondary">Uploaded</Badge>
+                <Badge variant="secondary">已上傳</Badge>
               ) : (
-                <Badge variant="outline">Missing</Badge>
+                <Badge variant="outline">缺少</Badge>
               )}
             </TableCell>
             <TableCell>
               <Badge variant={challenge.enabled ? "default" : "secondary"}>
-                {challenge.enabled ? "Enabled" : "Disabled"}
+                {challenge.enabled ? "已啟用" : "已停用"}
               </Badge>
             </TableCell>
             <TableCell>
@@ -1080,7 +1086,7 @@ function ChallengesTable({
                 <Button
                   size="icon-sm"
                   variant="outline"
-                  aria-label="Move challenge up"
+                  aria-label="將挑戰上移"
                   disabled={!canReorder || index === 0 || reorderPending}
                   onClick={() => onMove(index, -1)}
                 >
@@ -1089,7 +1095,7 @@ function ChallengesTable({
                 <Button
                   size="icon-sm"
                   variant="outline"
-                  aria-label="Move challenge down"
+                  aria-label="將挑戰下移"
                   disabled={!canReorder || index === challenges.length - 1 || reorderPending}
                   onClick={() => onMove(index, 1)}
                 >
@@ -1097,23 +1103,23 @@ function ChallengesTable({
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => onImage(challenge)}>
                   <ImageUpIcon data-icon="inline-start" />
-                  Image
+                  圖片
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => onEdit(challenge)}>
                   <PencilIcon data-icon="inline-start" />
-                  Edit
+                  編輯
                 </Button>
                 <ConfirmAction
-                  title="Disable challenge"
-                  description={`${challenge.title} will be hidden from teams and unavailable for new rounds.`}
-                  confirmLabel="Disable"
+                  title="停用挑戰"
+                  description={`${challenge.title} 將對隊伍隱藏，且無法用於新回合。`}
+                  confirmLabel="停用"
                   destructive
                   disabled={!challenge.enabled || disablePending}
                   onConfirm={() => onDisable(challenge)}
                 >
                   <Button size="sm" variant="destructive" disabled={!challenge.enabled || disablePending}>
                     <XCircleIcon data-icon="inline-start" />
-                    Disable
+                    停用
                   </Button>
                 </ConfirmAction>
               </div>
@@ -1148,7 +1154,7 @@ function ChallengeFormFields({
     <form onSubmit={onSubmit}>
       <FieldGroup>
         <Field>
-          <FieldLabel>Challenge set</FieldLabel>
+          <FieldLabel>挑戰題組</FieldLabel>
           <Select
             items={sets.map((set) => ({ value: set.id, label: setLabel(set) }))}
             value={selectedSetId}
@@ -1170,38 +1176,38 @@ function ChallengeFormFields({
           </Select>
         </Field>
         <Field>
-          <FieldLabel htmlFor={`${mode}-challenge-slug`}>Slug</FieldLabel>
+          <FieldLabel htmlFor={`${mode}-challenge-slug`}>識別碼</FieldLabel>
           <Input
             id={`${mode}-challenge-slug`}
             required
             disabled={mode === "edit"}
             value={form.slug}
             onChange={(event) => onChange((current) => ({ ...current, slug: event.target.value }))}
-            placeholder="draw-a-house"
+            placeholder="例如：hua-yi-dong-fang-zi"
           />
         </Field>
         <Field>
-          <FieldLabel htmlFor={`${mode}-challenge-title`}>Title</FieldLabel>
+          <FieldLabel htmlFor={`${mode}-challenge-title`}>標題</FieldLabel>
           <Input
             id={`${mode}-challenge-title`}
             required
             value={form.title}
             onChange={(event) => onChange((current) => ({ ...current, title: event.target.value }))}
-            placeholder="Draw a house"
+            placeholder="畫一棟房子"
           />
         </Field>
         <Field>
-          <FieldLabel htmlFor={`${mode}-challenge-description`}>Description</FieldLabel>
+          <FieldLabel htmlFor={`${mode}-challenge-description`}>描述</FieldLabel>
           <Textarea
             id={`${mode}-challenge-description`}
             value={form.description}
             onChange={(event) => onChange((current) => ({ ...current, description: event.target.value }))}
-            placeholder="Describe what teams should draw."
+            placeholder="描述隊伍應該畫什麼。"
           />
         </Field>
         <div className="grid gap-4 md:grid-cols-2">
           <Field>
-            <FieldLabel htmlFor={`${mode}-challenge-points`}>Points</FieldLabel>
+            <FieldLabel htmlFor={`${mode}-challenge-points`}>分數</FieldLabel>
             <Input
               id={`${mode}-challenge-points`}
               type="number"
@@ -1212,7 +1218,7 @@ function ChallengeFormFields({
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor={`${mode}-challenge-order`}>Order</FieldLabel>
+            <FieldLabel htmlFor={`${mode}-challenge-order`}>順序</FieldLabel>
             <Input
               id={`${mode}-challenge-order`}
               type="number"
@@ -1230,19 +1236,19 @@ function ChallengeFormFields({
             onCheckedChange={(checked) => onChange((current) => ({ ...current, enabled: checked }))}
           />
           <FieldContent>
-            <FieldLabel htmlFor={`${mode}-challenge-enabled`}>Enabled</FieldLabel>
-            <FieldDescription>Disabled challenges remain visible to admins but hidden from teams.</FieldDescription>
+            <FieldLabel htmlFor={`${mode}-challenge-enabled`}>啟用</FieldLabel>
+            <FieldDescription>停用的挑戰仍會對管理員顯示，但會對隊伍隱藏。</FieldDescription>
           </FieldContent>
         </Field>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onCancel}>
-            Cancel
+            取消
           </Button>
           <Button
             type="submit"
             disabled={submitting || !selectedSetId || !form.slug.trim() || !form.title.trim()}
           >
-            {submitting ? "Saving..." : mode === "create" ? "Create challenge" : "Save changes"}
+            {submitting ? "儲存中..." : mode === "create" ? "建立挑戰" : "儲存變更"}
           </Button>
         </DialogFooter>
       </FieldGroup>
