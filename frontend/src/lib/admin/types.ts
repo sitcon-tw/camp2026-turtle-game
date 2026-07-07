@@ -32,6 +32,16 @@ export type Team = {
   updated_at: Timestamp
 }
 
+export type BulkScoreAdjustmentResponse = {
+  updated_teams: Array<{
+    team_id: string
+    score_before: number
+    score_after: number
+    delta: number
+    score_event_id: string
+  }>
+}
+
 export type CanvasConfig = {
   width: number
   height: number

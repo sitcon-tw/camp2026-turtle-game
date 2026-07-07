@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { PowerIcon, Trash2Icon } from "lucide-react"
+import { PencilIcon, PowerIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -37,7 +37,7 @@ import {
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { ConfirmAction } from "@/components/admin/AdminPrimitives"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { adminApi, errorMessage } from "@/lib/admin/api"
 import type { Team } from "@/lib/admin/types"
 import { normalizeLoginCodeInput } from "@/lib/login-code"
@@ -50,11 +50,19 @@ type TeamForm = {
   note: string
 }
 
+type ScoreForm = {
+  target_score: string
+  reason: string
+}
+
 const emptyTeamForm: TeamForm = {
   name: "",
   login_code: "",
   note: "",
 }
+
+const defaultScoreReason = "Manual score correction"
+const resetAllScoresReason = "Reset all team scores from admin teams page"
 
 function enabledParam(filter: EnabledFilter) {
   if (filter === "enabled") return true
@@ -86,6 +94,12 @@ function parseBulkTeams(value: string) {
       }
     })
     .filter((team) => team.name)
+}
+
+function parseScoreInput(value: string) {
+  const score = Number(value)
+  if (!Number.isInteger(score) || score < 0) return null
+  return score
 }
 
 function TeamDialog({
@@ -170,6 +184,84 @@ function TeamDialog({
   )
 }
 
+function ScoreDialog({
+  open,
+  team,
+  isSaving,
+  error,
+  onOpenChange,
+  onSubmit,
+}: {
+  open: boolean
+  team: Team
+  isSaving: boolean
+  error: string | null
+  onOpenChange: (open: boolean) => void
+  onSubmit: (value: ScoreForm) => void
+}) {
+  const [form, setForm] = React.useState<ScoreForm>({
+    target_score: String(team.total_score),
+    reason: defaultScoreReason,
+  })
+  const parsedScore = parseScoreInput(form.target_score)
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>編輯隊伍分數</DialogTitle>
+          <DialogDescription>
+            將 {team.name} 的總分設定為指定分數，並留下分數調整紀錄。
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (parsedScore === null || !form.reason.trim()) return
+            onSubmit(form)
+          }}
+        >
+          <FieldGroup>
+            <Field data-invalid={parsedScore === null}>
+              <FieldLabel htmlFor="team-score-target">總分</FieldLabel>
+              <Input
+                id="team-score-target"
+                type="number"
+                min="0"
+                step="1"
+                required
+                aria-invalid={parsedScore === null}
+                value={form.target_score}
+                onChange={(event) => setForm((current) => ({ ...current, target_score: event.target.value }))}
+              />
+              <FieldDescription>目前分數：{team.total_score}</FieldDescription>
+            </Field>
+            <Field data-invalid={!form.reason.trim()}>
+              <FieldLabel htmlFor="team-score-reason">原因</FieldLabel>
+              <Textarea
+                id="team-score-reason"
+                required
+                aria-invalid={!form.reason.trim()}
+                value={form.reason}
+                onChange={(event) => setForm((current) => ({ ...current, reason: event.target.value }))}
+              />
+            </Field>
+            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                取消
+              </Button>
+              <Button type="submit" disabled={isSaving || parsedScore === null || !form.reason.trim()}>
+                {isSaving ? "儲存中..." : "儲存分數"}
+              </Button>
+            </DialogFooter>
+          </FieldGroup>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export default function AdminTeamsPage() {
   const queryClient = useQueryClient()
   const [search, setSearch] = React.useState("")
@@ -178,12 +270,19 @@ export default function AdminTeamsPage() {
   const [bulkOpen, setBulkOpen] = React.useState(false)
   const [bulkText, setBulkText] = React.useState("")
   const [editingTeam, setEditingTeam] = React.useState<Team | null>(null)
+  const [editingScoreTeam, setEditingScoreTeam] = React.useState<Team | null>(null)
   const [actionError, setActionError] = React.useState<string | null>(null)
 
   const teamsQuery = useQuery({
     queryKey: ["admin", "teams", { enabled, search }],
     queryFn: () => adminApi.teams({ enabled: enabledParam(enabled), search }),
   })
+
+  const invalidateScoreViews = () => {
+    void queryClient.invalidateQueries({ queryKey: ["admin", "teams"] })
+    void queryClient.invalidateQueries({ queryKey: ["leaderboard"] })
+    void queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] })
+  }
 
   const invalidateTeams = () => queryClient.invalidateQueries({ queryKey: ["admin", "teams"] })
 
@@ -255,6 +354,41 @@ export default function AdminTeamsPage() {
     onError: (error) => setActionError(errorMessage(error)),
   })
 
+  const setTeamScore = useMutation({
+    mutationFn: ({ team, form }: { team: Team; form: ScoreForm }) => {
+      const targetScore = parseScoreInput(form.target_score)
+      if (targetScore === null) throw new Error("Score must be a non-negative integer")
+      return adminApi.setTeamScores({
+        team_ids: [team.id],
+        target_score: targetScore,
+        reason: form.reason.trim(),
+      })
+    },
+    onSuccess: () => {
+      setEditingScoreTeam(null)
+      setActionError(null)
+      invalidateScoreViews()
+    },
+    onError: (error) => setActionError(errorMessage(error)),
+  })
+
+  const resetAllScores = useMutation({
+    mutationFn: async () => {
+      const allTeams = await adminApi.teams({ enabled: null, search: "" })
+      if (allTeams.length === 0) return { updated_teams: [] }
+      return adminApi.setTeamScores({
+        team_ids: allTeams.map((team) => team.id),
+        target_score: 0,
+        reason: resetAllScoresReason,
+      })
+    },
+    onSuccess: () => {
+      setActionError(null)
+      invalidateScoreViews()
+    },
+    onError: (error) => setActionError(errorMessage(error)),
+  })
+
   const teams = teamsQuery.data ?? []
   const activeCount = teams.filter((team) => team.enabled).length
   const parsedBulkCount = parseBulkTeams(bulkText).length
@@ -269,6 +403,21 @@ export default function AdminTeamsPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <ConfirmAction
+            title="重設所有隊伍分數"
+            description="要將所有隊伍的總分重設為 0 嗎？此操作會寫入分數調整紀錄，且不受目前搜尋或篩選條件限制。"
+            confirmLabel="重設分數"
+            destructive
+            disabled={resetAllScores.isPending}
+            onConfirm={async () => {
+              await resetAllScores.mutateAsync()
+            }}
+          >
+            <Button variant="outline">
+              <RotateCcwIcon data-icon="inline-start" />
+              重設全部分數
+            </Button>
+          </ConfirmAction>
           <Button
             variant="outline"
             onClick={() => {
@@ -396,6 +545,17 @@ export default function AdminTeamsPage() {
                         >
                           編輯
                         </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setTeamScore.reset()
+                            setEditingScoreTeam(team)
+                          }}
+                        >
+                          <PencilIcon data-icon="inline-start" />
+                          編輯分數
+                        </Button>
                         <ConfirmAction
                           title="重新產生隊伍登入碼"
                           description={`要重新產生 ${team.name} 的隊伍登入碼嗎？舊登入碼將無法再使用。`}
@@ -480,6 +640,24 @@ export default function AdminTeamsPage() {
           }}
           onSubmit={(form) => {
             updateTeam.mutate({ id: editingTeam.id, form })
+          }}
+        />
+      ) : null}
+
+      {editingScoreTeam ? (
+        <ScoreDialog
+          key={editingScoreTeam.id}
+          open={editingScoreTeam !== null}
+          team={editingScoreTeam}
+          isSaving={setTeamScore.isPending}
+          error={setTeamScore.isError ? errorMessage(setTeamScore.error) : null}
+          onOpenChange={(open) => {
+            if (!open) setEditingScoreTeam(null)
+            setActionError(null)
+            if (!open) setTeamScore.reset()
+          }}
+          onSubmit={(form) => {
+            setTeamScore.mutate({ team: editingScoreTeam, form })
           }}
         />
       ) : null}

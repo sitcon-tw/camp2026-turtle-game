@@ -3,6 +3,7 @@ import type {
   AdminLoginResponse,
   AdminMeResponse,
   ApiErrorBody,
+  BulkScoreAdjustmentResponse,
   Challenge,
   ChallengeSet,
   ReadinessResponse,
@@ -127,6 +128,12 @@ export const adminApi = {
   },
   rotateTeamCode(id: string) {
     return request<{ team: Team; login_code: string }>(`/api/v1/admin/teams/${id}/rotate-code`, { method: "POST" })
+  },
+  setTeamScores(input: { team_ids: string[]; target_score: number; reason: string }) {
+    return request<BulkScoreAdjustmentResponse>("/api/v1/admin/scores/bulk-adjust", {
+      method: "POST",
+      body: jsonBody({ operation: "set", ...input }),
+    })
   },
   challengeSets() {
     return request<ChallengeSet[]>("/api/v1/admin/challenge-sets")
