@@ -111,12 +111,12 @@ export default function AdminLayout() {
         <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton size="lg" tooltip="Turtle admin" render={<Link to="/admin" />}>
+              <SidebarMenuButton size="lg" tooltip="繪圖挑戰賽管理後台" render={<Link to="/admin" />}>
                 <span className="flex size-8 items-center justify-center rounded-[0.75rem] border-2 border-ink bg-primary text-primary-foreground shadow-[2px_2px_0_rgba(23,35,58,0.16)]">
                   <TurtleIcon className="size-4" />
                 </span>
                 <span className="grid flex-1 text-left leading-tight">
-                  <span className="truncate font-medium">Turtle Game</span>
+                  <span className="truncate font-medium">繪圖挑戰賽</span>
                   <span className="truncate text-xs text-muted-foreground">Admin Console</span>
                 </span>
               </SidebarMenuButton>

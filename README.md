@@ -1,6 +1,6 @@
-# Turtle Game
+# 繪圖挑戰賽
 
-Rust backend and Vite/React frontend for the turtle game.
+Rust backend and Vite/React frontend for 繪圖挑戰賽.
 
 ## Prerequisites
 

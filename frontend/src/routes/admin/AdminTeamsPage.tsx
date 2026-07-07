@@ -130,7 +130,7 @@ function TeamDialog({
               required
               value={form.name}
               onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-              placeholder="Green Turtles"
+              placeholder="綠隊"
             />
           </Field>
           <Field>
@@ -510,7 +510,7 @@ export default function AdminTeamsPage() {
               value={bulkText}
               onChange={(event) => setBulkText(event.target.value)}
               className="min-h-56 font-mono"
-              placeholder={"Green Turtles,GT-102,Coach: Lin\nBlue Turtles\nRed Turtles,RED-7"}
+              placeholder={"綠隊,GT-102,Coach: Lin\n藍隊\n紅隊,RED-7"}
             />
             <p className="text-sm text-muted-foreground">{parsedBulkCount} valid teams parsed.</p>
             {bulkCreate.isError ? <p role="alert" className="text-sm text-destructive">{errorMessage(bulkCreate.error)}</p> : null}

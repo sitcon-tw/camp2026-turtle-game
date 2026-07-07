@@ -1,5 +1,6 @@
+import { useEffect } from "react"
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query"
-import { BrowserRouter, Navigate, Outlet, Route, Routes } from "react-router-dom"
+import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom"
 import { ThemeProvider } from "next-themes"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -27,6 +28,28 @@ const queryClient = new QueryClient({
     },
   },
 })
+
+const APP_TITLE = "繪圖挑戰賽"
+
+function DocumentTitle() {
+  const { pathname } = useLocation()
+
+  useEffect(() => {
+    const routeTitles: Record<string, string> = {
+      "/": "隊伍登入",
+      "/play": "小隊工作站",
+      "/blackboard": "黑板",
+      "/admin/login": "管理員登入",
+      "/admin": "管理中心",
+      "/admin/challenges": "題目管理",
+      "/admin/teams": "隊伍管理",
+    }
+    const routeTitle = routeTitles[pathname]
+    document.title = routeTitle ? `${APP_TITLE} | ${routeTitle}` : APP_TITLE
+  }, [pathname])
+
+  return null
+}
 
 function RequireAdmin() {
   const token = getAdminToken()
@@ -70,6 +93,7 @@ function App() {
       <TooltipProvider>
         <QueryClientProvider client={queryClient}>
           <BrowserRouter>
+            <DocumentTitle />
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/blackboard" element={<BlackboardPage />} />

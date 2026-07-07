@@ -42,7 +42,7 @@ export default function StudentLayout() {
             <span className="flex size-10 items-center justify-center rounded-[0.9rem] border-2 border-ink bg-primary text-primary-foreground shadow-[2px_2px_0_rgba(23,35,58,0.16)]">
               <TurtleIcon className="size-5" />
             </span>
-            <span>Turtle Game</span>
+            <span>繪圖挑戰賽</span>
           </Link>
           <div className="flex items-center gap-3">
             <div className="hidden text-right text-sm sm:block">
