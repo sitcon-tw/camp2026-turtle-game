@@ -301,6 +301,7 @@ export default function AdminCommandCenterPage() {
           <ConfirmAction
             title="重設遊戲為閒置？"
             description="目前回合、提交、投票、提名與回合計分將被刪除，黑板會清空。此操作無法復原。"
+            details="隊伍分數不會被重置，要重置隊伍分數的話，請前往「隊伍」分頁"
             confirmLabel="重設為閒置"
             destructive
             disabled={snapshot.state.phase === "idle" || resetCurrentRound.isPending}

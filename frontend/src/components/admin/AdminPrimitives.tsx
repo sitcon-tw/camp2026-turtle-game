@@ -98,6 +98,7 @@ export function JsonBlock({
 export function ConfirmAction({
   title,
   description,
+  details,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
   destructive = false,
@@ -107,6 +108,7 @@ export function ConfirmAction({
 }: {
   title: string
   description: string
+  details?: React.ReactNode
   confirmLabel?: string
   cancelLabel?: string
   destructive?: boolean
@@ -125,6 +127,7 @@ export function ConfirmAction({
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
+          {details ? <div className="text-sm font-semibold text-destructive">{details}</div> : null}
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={isConfirming}>{cancelLabel}</AlertDialogCancel>

@@ -543,6 +543,7 @@ export default function AdminTeamsPage() {
                             setEditingTeam(team)
                           }}
                         >
+                          <PencilIcon data-icon="inline-start" />
                           編輯
                         </Button>
                         <Button
@@ -563,7 +564,10 @@ export default function AdminTeamsPage() {
                           disabled={rotateCode.isPending}
                           onConfirm={() => rotateCode.mutate(team)}
                         >
-                          <Button variant="outline" size="sm">重新產生</Button>
+                          <Button variant="outline" size="sm">
+                            <RotateCcwIcon data-icon="inline-start" />
+                            重新產生
+                          </Button>
                         </ConfirmAction>
                         <ConfirmAction
                           title={team.enabled ? "停用隊伍" : "啟用隊伍"}
