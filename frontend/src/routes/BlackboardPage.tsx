@@ -1126,16 +1126,13 @@ function LeaderboardPanel({ leaderboard, results }: { leaderboard: LeaderboardEn
                   <div className={cn("truncate font-semibold", isDense ? "text-sm lg:text-base" : isCompact ? "text-base lg:text-xl" : "text-lg lg:text-2xl")}>
                     {team.team_name}
                   </div>
-                  <div className={cn("truncate text-muted-foreground", isDense ? "text-[0.6875rem]" : "text-xs lg:text-sm")}>
-                    {roundPoints > 0 ? `本回合 +${roundPoints}` : `解出 ${team.solved_count}`}
-                  </div>
                 </div>
                 <div className="flex shrink-0 flex-col items-end leading-none">
                   <div className={cn("font-mono font-semibold tabular-nums", isDense ? "text-lg lg:text-2xl" : isCompact ? "text-xl lg:text-3xl" : "text-2xl lg:text-4xl")}>
                     {team.total_score}
                   </div>
-                  {roundPoints !== 0 && !isCompact ? (
-                    <div className={cn("mt-1 font-mono text-xs font-black tabular-nums lg:text-sm", scoreDiffClass(roundPoints))}>
+                  {roundPoints !== 0 ? (
+                    <div className={cn("font-mono font-black tabular-nums", isDense ? "mt-0.5 text-[0.625rem] lg:text-xs" : "mt-1 text-xs lg:text-sm", scoreDiffClass(roundPoints))}>
                       {formatScoreDiff(roundPoints)}
                     </div>
                   ) : null}
