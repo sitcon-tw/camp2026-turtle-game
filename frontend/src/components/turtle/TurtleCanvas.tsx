@@ -82,13 +82,21 @@ export function TurtleCanvas({
   const pixelRatio = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1
   const bitmapWidth = Math.max(1, Math.round((viewportSize?.width ?? displayWidth) * pixelRatio))
   const bitmapHeight = Math.max(1, Math.round((viewportSize?.height ?? displayHeight) * pixelRatio))
-  const playbackId = `${animationKey ?? "default"}:${normalizedTrace?.steps.length ?? 0}`
+  const totalStepCount = normalizedTrace?.steps.length ?? 0
+  const playbackId = `${animationKey ?? "default"}:${totalStepCount}`
   const autoStepIndex = animated && playbackState?.id === playbackId ? playbackState.stepIndex : -1
   const renderedStepIndex = currentStepIndex ?? (animated ? autoStepIndex : undefined)
+  const autoStepDelayMs =
+    animated && playbackState?.id === playbackId
+      ? playbackDelayForStep(normalizedTrace?.steps[playbackState.stepIndex], totalStepCount)
+      : playbackDelayForStep(undefined, totalStepCount)
   const autoStepProgress =
     animated && playbackState?.id === playbackId
-      ? playbackProgress(playbackState.now, playbackState.stepStartedAt)
+      ? playbackProgress(playbackState.now, playbackState.stepStartedAt, autoStepDelayMs)
       : 1
+  const controlledStep =
+    currentStepIndex === undefined ? undefined : normalizedTrace?.steps[currentStepIndex]
+  const controlledStepDelayMs = playbackDelayForStep(controlledStep, totalStepCount)
   const renderedStepProgress = currentStepIndex !== undefined ? (animated ? controlledStepProgress : 1) : autoStepProgress
   const targetImage = targetImageState && targetImageState.src === targetImageSrc ? targetImageState.image : null
 
@@ -165,21 +173,24 @@ export function TurtleCanvas({
     const tick = (now: number) => {
       if (cancelled || hasEnded) return
 
-      while (now - stepStartedAt >= playbackDelayForStep(normalizedTrace.steps[stepIndex])) {
+      while (now - stepStartedAt >= playbackDelayForStep(normalizedTrace.steps[stepIndex], totalStepCount)) {
+        const stepDelayMs = playbackDelayForStep(normalizedTrace.steps[stepIndex], totalStepCount)
         stepIndex += 1
-        stepStartedAt = now
+        stepStartedAt += stepDelayMs
 
         if (stepIndex >= normalizedTrace.steps.length) {
           if (loop) {
             stepIndex = 0
+            stepStartedAt = now
             break
           }
 
+          const finalStep = normalizedTrace.steps.at(-1)
           hasEnded = true
           setPlaybackState({
             id: playbackId,
             stepIndex: normalizedTrace.steps.length - 1,
-            stepStartedAt: now - playbackDelayForStep(normalizedTrace.steps.at(-1)),
+            stepStartedAt: now - playbackDelayForStep(finalStep, totalStepCount),
             now,
           })
           onPlaybackEnd?.()
@@ -198,7 +209,7 @@ export function TurtleCanvas({
       cancelled = true
       window.cancelAnimationFrame(animationFrame)
     }
-  }, [animated, currentStepIndex, loop, normalizedTrace, onPlaybackEnd, playbackId])
+  }, [animated, currentStepIndex, loop, normalizedTrace, onPlaybackEnd, playbackId, totalStepCount])
 
   useEffect(() => {
     if (!animated || currentStepIndex === undefined) return
@@ -209,7 +220,7 @@ export function TurtleCanvas({
 
     const tick = (now: number) => {
       if (cancelled) return
-      const progress = playbackProgress(now, startedAt)
+      const progress = playbackProgress(now, startedAt, controlledStepDelayMs)
       setControlledStepProgress(progress)
       if (progress < 1) animationFrame = window.requestAnimationFrame(tick)
     }
@@ -220,7 +231,7 @@ export function TurtleCanvas({
       cancelled = true
       window.cancelAnimationFrame(animationFrame)
     }
-  }, [animated, currentStepIndex])
+  }, [animated, controlledStepDelayMs, currentStepIndex])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -271,6 +282,6 @@ export function TurtleCanvas({
   )
 }
 
-function playbackProgress(now: number, stepStartedAt: number) {
-  return Math.max(0, Math.min(1, (now - stepStartedAt) / playbackDelayForStep()))
+function playbackProgress(now: number, stepStartedAt: number, stepDelayMs: number) {
+  return Math.max(0, Math.min(1, (now - stepStartedAt) / stepDelayMs))
 }

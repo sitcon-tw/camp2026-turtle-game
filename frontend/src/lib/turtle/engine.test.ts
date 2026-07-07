@@ -138,7 +138,7 @@ describe("frontend turtle renderer engine", () => {
     ])
   })
 
-  it("uses a fixed 500ms playback delay for every trace step", () => {
+  it("uses a 200ms playback delay capped at 30 seconds total", () => {
     const step = (duration_ms: number): TraceStep => ({
       step_index: 0,
       block_id: "wait",
@@ -149,8 +149,10 @@ describe("frontend turtle renderer engine", () => {
       duration_ms,
     })
 
-    expect(playbackDelayForStep(undefined)).toBe(500)
-    expect(playbackDelayForStep(step(25))).toBe(500)
-    expect(playbackDelayForStep(step(0))).toBe(500)
+    expect(playbackDelayForStep(undefined)).toBe(200)
+    expect(playbackDelayForStep(step(25))).toBe(200)
+    expect(playbackDelayForStep(step(0), 150)).toBe(200)
+    expect(playbackDelayForStep(step(0), 300)).toBe(100)
+    expect(playbackDelayForStep(undefined, 5_000) * 5_000).toBeLessThanOrEqual(30_000)
   })
 })

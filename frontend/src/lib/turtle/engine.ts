@@ -33,7 +33,8 @@ export const DEFAULT_CANVAS: TurtleCanvasSpec = {
 
 const DEFAULT_STROKE_COLOR = "#000000"
 const DEFAULT_STROKE_WIDTH = 1
-const DEFAULT_STEP_DURATION_MS = 500
+const DEFAULT_STEP_DURATION_MS = 200
+const MAX_PLAYBACK_DURATION_MS = 30_000
 
 export function createDefaultProgram(canvas: Partial<TurtleCanvasSpec> = {}): TurtleProgram {
   const normalizedCanvas = normalizeCanvas(canvas)
@@ -257,9 +258,14 @@ export function visibleLinesForStep(trace: TraceStep[], stepIndex?: number): Dra
   return lines
 }
 
-export function playbackDelayForStep(step?: TraceStep | undefined) {
+export function playbackDelayForStep(step?: TraceStep | undefined, totalStepCount?: number) {
   void step
-  return DEFAULT_STEP_DURATION_MS
+  if (totalStepCount === undefined || !Number.isFinite(totalStepCount) || totalStepCount <= 0) {
+    return DEFAULT_STEP_DURATION_MS
+  }
+
+  const normalizedStepCount = Math.max(1, Math.floor(totalStepCount))
+  return Math.min(DEFAULT_STEP_DURATION_MS, MAX_PLAYBACK_DURATION_MS / normalizedStepCount)
 }
 
 export function normalizeHeading(degrees: number): number {
