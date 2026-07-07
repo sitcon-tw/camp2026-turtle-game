@@ -1,4 +1,4 @@
-import type * as React from "react"
+import * as React from "react"
 import { AlertTriangleIcon, CheckCircle2Icon, CircleIcon, Loader2Icon, SearchXIcon, XCircleIcon } from "lucide-react"
 
 import { AdminApiError, errorMessage } from "@/lib/admin/api"
@@ -114,18 +114,34 @@ export function ConfirmAction({
   onConfirm: () => void | Promise<void>
   children: React.ReactElement
 }) {
+  const [open, setOpen] = React.useState(false)
+  const [isConfirming, setIsConfirming] = React.useState(false)
+  const isDisabled = disabled || isConfirming
+
   return (
-    <AlertDialog>
-      <AlertDialogTrigger disabled={disabled} render={children} />
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      <AlertDialogTrigger disabled={isDisabled} render={children} />
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>{cancelLabel}</AlertDialogCancel>
-          <AlertDialogAction variant={destructive ? "destructive" : "default"} onClick={onConfirm}>
-            {confirmLabel}
+          <AlertDialogCancel disabled={isConfirming}>{cancelLabel}</AlertDialogCancel>
+          <AlertDialogAction
+            variant={destructive ? "destructive" : "default"}
+            disabled={isDisabled}
+            onClick={async () => {
+              setIsConfirming(true)
+              try {
+                await onConfirm()
+                setOpen(false)
+              } finally {
+                setIsConfirming(false)
+              }
+            }}
+          >
+            {isConfirming ? "Working..." : confirmLabel}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -230,7 +230,10 @@ export default function AdminTeamsPage() {
 
   const rotateCode = useMutation({
     mutationFn: (team: Team) => adminApi.rotateTeamCode(team.id),
-    onSuccess: () => invalidateTeams(),
+    onSuccess: () => {
+      setActionError(null)
+      invalidateTeams()
+    },
     onError: (error) => setActionError(errorMessage(error)),
   })
 
@@ -266,10 +269,24 @@ export default function AdminTeamsPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => setBulkOpen(true)}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              bulkCreate.reset()
+              setBulkText("")
+              setBulkOpen(true)
+            }}
+          >
             Bulk create
           </Button>
-          <Button onClick={() => setCreateOpen(true)}>Create team</Button>
+          <Button
+            onClick={() => {
+              createTeam.reset()
+              setCreateOpen(true)
+            }}
+          >
+            Create team
+          </Button>
         </div>
       </div>
 
@@ -303,14 +320,18 @@ export default function AdminTeamsPage() {
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="flex flex-col gap-2 sm:flex-row">
+            <FieldLabel htmlFor="team-search" className="sr-only">
+              Search team name or code
+            </FieldLabel>
             <Input
+              id="team-search"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search team name or code"
               className="sm:max-w-sm"
             />
             <Select items={[{ value: "all", label: "All teams" }, { value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }]} value={enabled} onValueChange={(value) => setEnabled(value as EnabledFilter)}>
-              <SelectTrigger className="w-full sm:w-40">
+              <SelectTrigger aria-label="Filter teams by status" className="w-full sm:w-40">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -321,8 +342,8 @@ export default function AdminTeamsPage() {
             </Select>
           </div>
 
-          {actionError ? <p className="text-sm text-destructive">{actionError}</p> : null}
-          {teamsQuery.isError ? <p className="text-sm text-destructive">{errorMessage(teamsQuery.error)}</p> : null}
+          {actionError ? <p role="alert" className="text-sm text-destructive">{actionError}</p> : null}
+          {teamsQuery.isError ? <p role="alert" className="text-sm text-destructive">{errorMessage(teamsQuery.error)}</p> : null}
 
           <Table>
             <TableHeader>
@@ -365,7 +386,14 @@ export default function AdminTeamsPage() {
                     <TableCell>{formatDate(team.updated_at)}</TableCell>
                     <TableCell>
                       <div className="flex flex-wrap justify-end gap-2">
-                        <Button variant="outline" size="sm" onClick={() => setEditingTeam(team)}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            updateTeam.reset()
+                            setEditingTeam(team)
+                          }}
+                        >
                           Edit
                         </Button>
                         <ConfirmAction
@@ -427,6 +455,7 @@ export default function AdminTeamsPage() {
           onOpenChange={(open) => {
             setCreateOpen(open)
             setActionError(null)
+            if (!open) createTeam.reset()
           }}
           onSubmit={(form) => createTeam.mutate(form)}
         />
@@ -447,6 +476,7 @@ export default function AdminTeamsPage() {
           onOpenChange={(open) => {
             if (!open) setEditingTeam(null)
             setActionError(null)
+            if (!open) updateTeam.reset()
           }}
           onSubmit={(form) => {
             updateTeam.mutate({ id: editingTeam.id, form })
@@ -454,7 +484,16 @@ export default function AdminTeamsPage() {
         />
       ) : null}
 
-      <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
+      <Dialog
+        open={bulkOpen}
+        onOpenChange={(open) => {
+          setBulkOpen(open)
+          if (!open) {
+            setBulkText("")
+            bulkCreate.reset()
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Bulk create teams</DialogTitle>
@@ -463,14 +502,18 @@ export default function AdminTeamsPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3">
+            <FieldLabel htmlFor="bulk-team-rows" className="sr-only">
+              Bulk team rows
+            </FieldLabel>
             <Textarea
+              id="bulk-team-rows"
               value={bulkText}
               onChange={(event) => setBulkText(event.target.value)}
               className="min-h-56 font-mono"
               placeholder={"Green Turtles,GT-102,Coach: Lin\nBlue Turtles\nRed Turtles,RED-7"}
             />
             <p className="text-sm text-muted-foreground">{parsedBulkCount} valid teams parsed.</p>
-            {bulkCreate.isError ? <p className="text-sm text-destructive">{errorMessage(bulkCreate.error)}</p> : null}
+            {bulkCreate.isError ? <p role="alert" className="text-sm text-destructive">{errorMessage(bulkCreate.error)}</p> : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setBulkOpen(false)}>
