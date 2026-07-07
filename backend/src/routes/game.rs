@@ -254,7 +254,7 @@ async fn create_current_round_submission(
     user: AuthenticatedUser,
     Json(payload): Json<SubmitRequest>,
 ) -> Result<(StatusCode, Json<SubmissionResponse>), AppError> {
-    let team_id = require_team_user(&user)?;
+    let team_id = require_enabled_team_user(&state, &user)?;
     let snapshot = state
         .game
         .snapshot(state.repository.as_ref(), Some(team_id))
@@ -316,7 +316,7 @@ async fn record_team_selection_vote(
     headers: HeaderMap,
     Json(payload): Json<TeamSelectionVoteRequest>,
 ) -> Result<Json<TeamSelectionVote>, AppError> {
-    let team_id = require_team_user(&user)?;
+    let team_id = require_enabled_team_user(&state, &user)?;
     let device_id = device_id(&headers)?;
     let (vote, view) = state
         .game
@@ -346,7 +346,7 @@ async fn record_public_vote(
     user: AuthenticatedUser,
     Json(payload): Json<PublicVoteRequest>,
 ) -> Result<Json<PublicVote>, AppError> {
-    let team_id = require_team_user(&user)?;
+    let team_id = require_enabled_team_user(&state, &user)?;
     let normalized = normalize_public_choices(payload.votes)?;
     let (vote, view) = state
         .game
@@ -443,6 +443,21 @@ fn require_team_user(user: &AuthenticatedUser) -> Result<TeamId, AppError> {
         return Err(AppError::forbidden("team authentication is required"));
     }
     parse_team_id(&user.subject)
+}
+
+fn require_enabled_team_user(
+    state: &AppState,
+    user: &AuthenticatedUser,
+) -> Result<TeamId, AppError> {
+    let team_id = require_team_user(user)?;
+    let team = state
+        .repository
+        .get_team(team_id)?
+        .ok_or_else(|| AppError::not_found("team was not found"))?;
+    if !team.enabled {
+        return Err(AppError::forbidden("team is disabled"));
+    }
+    Ok(team_id)
 }
 
 fn parse_team_id(subject: &str) -> Result<TeamId, AppError> {
