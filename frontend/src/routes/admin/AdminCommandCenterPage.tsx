@@ -57,10 +57,6 @@ export default function AdminCommandCenterPage() {
   const [startForm, setStartForm] = useState<StartRoundForm>(defaultStartRoundForm)
   const [extendSeconds, setExtendSeconds] = useState("60")
   const [actionError, setActionError] = useState<string | null>(null)
-  const [selectedReplayCue, setSelectedReplayCue] = useState<{ roundId: string | null; submissionId: string | null }>({
-    roundId: null,
-    submissionId: null,
-  })
 
   const teams = useQuery({
     queryKey: ["admin", "teams", { enabled: null, search: "" }],
@@ -88,8 +84,6 @@ export default function AdminCommandCenterPage() {
   })
 
   const snapshot = game.data
-  const currentRoundId = snapshot?.round?.id ?? null
-  const selectedSubmissionId = selectedReplayCue.roundId === currentRoundId ? selectedReplayCue.submissionId : null
   const enabledChallenges = useMemo(
     () => (challenges.data ?? []).filter((challenge) => challenge.enabled).sort((left, right) => left.order - right.order),
     [challenges.data],
@@ -268,7 +262,6 @@ export default function AdminCommandCenterPage() {
         snapshot={snapshot}
         teams={allTeams}
         mode={blackboardControl.data?.display.mode ?? blackboard.data?.display.mode ?? "submission"}
-        selectedReplaySubmissionId={selectedSubmissionId}
         blackboardSelectedSubmissionId={blackboardControl.data?.display.selected_submission_id ?? blackboard.data?.selected_submission_id ?? null}
         selectedPreviewRunId={blackboardControl.data?.display.selected_preview_run_id ?? blackboard.data?.display.selected_preview_run_id ?? null}
         previewSessions={blackboardControl.data?.preview_sessions ?? blackboard.data?.preview_sessions ?? []}
@@ -277,7 +270,6 @@ export default function AdminCommandCenterPage() {
         playingSubmissionId={playSubmission.variables ?? null}
         isPlayingSubmission={playSubmission.isPending}
         isClearingBlackboard={clearBlackboardPlayback.isPending}
-        onSelectSubmission={(submissionId) => setSelectedReplayCue({ roundId: currentRoundId, submissionId })}
         onPlaySubmission={(submissionId) => playSubmission.mutate(submissionId)}
         onClearBlackboard={() => clearBlackboardPlayback.mutate()}
         onSelectPreviewRun={(previewRunId) => setBlackboardDisplay.mutate({ mode: "preview", preview_run_id: previewRunId })}
@@ -555,7 +547,6 @@ function BlackboardControlPanel({
   snapshot,
   teams,
   mode,
-  selectedReplaySubmissionId,
   blackboardSelectedSubmissionId,
   selectedPreviewRunId,
   previewSessions,
@@ -564,7 +555,6 @@ function BlackboardControlPanel({
   playingSubmissionId,
   isPlayingSubmission,
   isClearingBlackboard,
-  onSelectSubmission,
   onPlaySubmission,
   onClearBlackboard,
   onSelectPreviewRun,
@@ -573,7 +563,6 @@ function BlackboardControlPanel({
   snapshot: GameStateResponse
   teams: Team[]
   mode: BlackboardDisplayMode
-  selectedReplaySubmissionId: string | null
   blackboardSelectedSubmissionId: string | null
   selectedPreviewRunId: string | null
   previewSessions: BlackboardPreviewSession[]
@@ -582,7 +571,6 @@ function BlackboardControlPanel({
   playingSubmissionId: string | null
   isPlayingSubmission: boolean
   isClearingBlackboard: boolean
-  onSelectSubmission: (submissionId: string) => void
   onPlaySubmission: (submissionId: string) => void
   onClearBlackboard: () => void
   onSelectPreviewRun: (previewRunId: string) => void
@@ -653,12 +641,10 @@ function BlackboardControlPanel({
               teams={teams}
               mode={mode}
               teamNameById={teamNameById}
-              selectedSubmissionId={selectedReplaySubmissionId}
               blackboardSelectedSubmissionId={blackboardSelectedSubmissionId}
               playingSubmissionId={playingSubmissionId}
               isPlayingSubmission={isPlayingSubmission}
               isClearingBlackboard={isClearingBlackboard}
-              onSelectSubmission={onSelectSubmission}
               onPlaySubmission={onPlaySubmission}
               onClearBlackboard={onClearBlackboard}
             />
@@ -905,12 +891,10 @@ function SubmissionReplayDeck({
   teams,
   mode,
   teamNameById,
-  selectedSubmissionId,
   blackboardSelectedSubmissionId,
   playingSubmissionId,
   isPlayingSubmission,
   isClearingBlackboard,
-  onSelectSubmission,
   onPlaySubmission,
   onClearBlackboard,
 }: {
@@ -918,227 +902,202 @@ function SubmissionReplayDeck({
   teams: Team[]
   mode: BlackboardDisplayMode
   teamNameById: Map<string, string>
-  selectedSubmissionId: string | null
   blackboardSelectedSubmissionId: string | null
   playingSubmissionId: string | null
   isPlayingSubmission: boolean
   isClearingBlackboard: boolean
-  onSelectSubmission: (submissionId: string) => void
   onPlaySubmission: (submissionId: string) => void
   onClearBlackboard: () => void
 }) {
+  const [activeSubmissionTeamId, setActiveSubmissionTeamId] = useState<string | null>(null)
   const submissions = useMemo(() => sortSubmissionsByRecency(snapshot.round_submissions), [snapshot.round_submissions])
-  const previewSubmissionId = selectedSubmissionId ?? blackboardSelectedSubmissionId
-  const selectedSubmission = previewSubmissionId
-    ? submissions.find((submission) => submission.id === previewSubmissionId) ?? null
-    : null
   const blackboardSubmission = blackboardSelectedSubmissionId
     ? submissions.find((submission) => submission.id === blackboardSelectedSubmissionId) ?? null
     : null
-  const completedCount = submissions.filter((submission) => submission.status === "completed").length
+  const submissionsByTeam = useMemo(() => {
+    const grouped = new Map<string, GameSubmission[]>()
+    for (const submission of submissions) {
+      const teamSubmissions = grouped.get(submission.team_id) ?? []
+      teamSubmissions.push(submission)
+      grouped.set(submission.team_id, teamSubmissions)
+    }
+    return [...grouped.entries()].sort((left, right) => {
+      const leftName = teamNameById.get(left[0]) ?? left[0]
+      const rightName = teamNameById.get(right[0]) ?? right[0]
+      return leftName.localeCompare(rightName)
+    })
+  }, [submissions, teamNameById])
+  const completedCount = submissions.filter(canPlaySubmission).length
   const activeTeamCount = new Set(submissions.map((submission) => submission.team_id)).size
   const enabledTeamCount = teams.filter((team) => team.enabled).length
+  const firstTeamId = submissionsByTeam[0]?.[0] ?? null
+  const boardTeamId = blackboardSubmission?.team_id ?? null
+  const defaultTeamId = boardTeamId && submissionsByTeam.some(([teamId]) => teamId === boardTeamId) ? boardTeamId : firstTeamId
+  const selectedTeamId = submissionsByTeam.some(([teamId]) => teamId === activeSubmissionTeamId)
+    ? activeSubmissionTeamId
+    : defaultTeamId
 
   if (submissions.length === 0) {
     return (
       <EmptyPanel
         title="尚未有提交作品"
-        description="隊伍提交繪圖後，這裡會成為教室黑板的重播區。"
+        description="隊伍提交繪圖後，作品會依小隊分組出現在這裡。"
       />
     )
   }
 
-  const selectedCanPlay = Boolean(selectedSubmission?.trace && selectedSubmission.status === "completed")
   const canClearToCounts = mode !== "submission" || Boolean(blackboardSelectedSubmissionId)
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.08fr)_minmax(22rem,0.92fr)]">
-      <section className="overflow-hidden rounded-[1.25rem] border-2 border-ink bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.18),transparent_34%),linear-gradient(135deg,hsl(var(--surface-raised)),hsl(var(--card)))] shadow-[4px_4px_0_rgba(23,35,58,0.14)]">
-        <div className="flex flex-col gap-3 border-b-2 border-ink bg-card/90 p-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <div className="text-sm font-black uppercase tracking-[0.22em] text-muted-foreground">黑板重播區</div>
-            <h2 className="mt-1 truncate text-2xl font-black">選擇下一個全場焦點</h2>
-            <p className="mt-1 text-sm font-semibold text-muted-foreground">
-              在提交開放階段，只有播放的提交作品會顯示在公開黑板上。
-            </p>
-          </div>
-          <div className="grid grid-cols-3 gap-2 text-center sm:min-w-72">
-            <ReplayStat label="總數" value={submissions.length} />
-            <ReplayStat label="可播放" value={completedCount} />
-            <ReplayStat label="隊伍" value={`${activeTeamCount}/${enabledTeamCount}`} />
-          </div>
+    <div className="grid gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="outline" className="font-black">{submissions.length} 總數</Badge>
+          <Badge variant="outline" className="font-black">{completedCount} 可播放</Badge>
+          <Badge variant="outline" className="font-black">{activeTeamCount}/{enabledTeamCount} 隊伍</Badge>
         </div>
-
-        <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_14rem]">
-          <div className="min-w-0">
-            {selectedSubmission ? (
-              <SubmissionPreview
-                submission={selectedSubmission}
-                challenge={snapshot.challenge}
-                title={`${teamNameById.get(selectedSubmission.team_id) ?? "隊伍"} #${selectedSubmission.attempt_no}`}
-                sourceLabel={submissionStatusLabel(selectedSubmission)}
-                className="h-[26rem]"
-                viewportClassName="h-[calc(100%-4.5rem)]"
-                animated={selectedCanPlay}
-                animationKey={`admin-selected:${selectedSubmission.id}`}
-                showTurtle={selectedCanPlay}
-              />
-            ) : (
-              <EmptyPanel
-                title="尚未選擇提交作品"
-                description="在播放完成的提交作品之前，公開黑板會維持顯示隊伍提交統計。"
-              />
-            )}
-          </div>
-          <aside className="grid content-between gap-3 rounded-[1rem] border-2 border-ink bg-background/80 p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]">
-            <div className="grid gap-3">
-              <div>
-                <div className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground">預覽</div>
-                <div className="mt-1 text-xl font-black">
-                  {selectedSubmission ? teamNameById.get(selectedSubmission.team_id) ?? selectedSubmission.team_id.slice(0, 8) : "無"}
-                </div>
-                <div className="mt-1 text-sm font-semibold text-muted-foreground">
-                  {selectedSubmission ? `第 ${selectedSubmission.attempt_no} 次嘗試 / ${formatSubmissionTime(selectedSubmission.created_at)}` : "選擇一張繪圖"}
-                </div>
-              </div>
-              {selectedSubmission ? (
-                <div className="grid gap-2">
-                  <Badge variant={selectedCanPlay ? "secondary" : "outline"} className="w-fit font-black">
-                    {selectedCanPlay ? "可播放" : submissionStatusLabel(selectedSubmission)}
-                  </Badge>
-                  <div className="text-sm font-semibold text-muted-foreground">
-                    {selectedCanPlay
-                      ? "將這段軌跡送到公開黑板焦點區。"
-                      : "軌跡處理完成後即可播放重播。"}
-                  </div>
-                </div>
-              ) : null}
-              <div className="rounded-[0.875rem] border border-border bg-card/80 px-3 py-3">
-                <div className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground">公開黑板</div>
-                <div className="mt-1 truncate font-black">
-                  {blackboardSubmission
-                    ? `${teamNameById.get(blackboardSubmission.team_id) ?? blackboardSubmission.team_id.slice(0, 8)} #${blackboardSubmission.attempt_no}`
-                    : "提交統計"}
-                </div>
-                <div className="mt-1 text-xs font-bold text-muted-foreground">
-                  {blackboardSubmission ? "目前正在播放重播" : "正在顯示預設統計"}
-                </div>
-              </div>
-            </div>
-            <div className="grid gap-2">
-              <Button
-                size="lg"
-                disabled={!selectedSubmission || !selectedCanPlay || isPlayingSubmission}
-                onClick={() => selectedSubmission ? onPlaySubmission(selectedSubmission.id) : undefined}
-              >
-                {isPlayingSubmission && playingSubmissionId === selectedSubmission?.id ? (
-                  <Loader2Icon data-icon="inline-start" className="animate-spin" />
-                ) : (
-                  <PlayIcon data-icon="inline-start" />
-                )}
-                播放至黑板
-              </Button>
-              <Button
-                variant="outline"
-                disabled={!canClearToCounts || isClearingBlackboard}
-                onClick={onClearBlackboard}
-              >
-                {isClearingBlackboard ? (
-                  <Loader2Icon data-icon="inline-start" className="animate-spin" />
-                ) : (
-                  <XIcon data-icon="inline-start" />
-                )}
-                清除並顯示統計
-              </Button>
-            </div>
-          </aside>
-        </div>
-      </section>
-
-      <section className="rounded-[1.25rem] border-2 border-ink bg-surface-raised p-3 shadow-[4px_4px_0_rgba(23,35,58,0.12)]">
-        <div className="mb-3 flex items-center justify-between gap-3 px-1">
-          <div>
-            <h3 className="font-black">近期提交作品</h3>
-            <p className="text-sm font-semibold text-muted-foreground">最新優先。點選任一卡片即可準備播放。</p>
-          </div>
-          <Badge variant="outline" className="font-mono font-black">{submissions.length}</Badge>
-        </div>
-        <div className="grid max-h-[38rem] gap-3 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-          {submissions.map((submission) => (
-            <SubmissionReplayCard
-              key={submission.id}
-              submission={submission}
-              teamName={teamNameById.get(submission.team_id) ?? submission.team_id.slice(0, 8)}
-              selected={submission.id === selectedSubmission?.id}
-              onBoard={submission.id === blackboardSelectedSubmissionId}
-              onSelect={() => onSelectSubmission(submission.id)}
-            />
+        <Button
+          variant="outline"
+          disabled={!canClearToCounts || isClearingBlackboard}
+          onClick={onClearBlackboard}
+        >
+          {isClearingBlackboard ? (
+            <Loader2Icon data-icon="inline-start" className="animate-spin" />
+          ) : (
+            <XIcon data-icon="inline-start" />
+          )}
+          清除並顯示統計
+        </Button>
+      </div>
+      <Tabs
+        value={selectedTeamId ?? undefined}
+        onValueChange={setActiveSubmissionTeamId}
+        orientation="vertical"
+        className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]"
+      >
+        <TabsList className="w-full">
+          {submissionsByTeam.map(([teamId, teamSubmissions]) => (
+            <TabsTrigger key={teamId} value={teamId} className="justify-start">
+              {teamNameById.get(teamId) ?? teamId.slice(0, 8)}
+              <Badge variant="outline" className="ml-auto">{teamSubmissions.length}</Badge>
+            </TabsTrigger>
           ))}
-        </div>
-      </section>
+        </TabsList>
+        {submissionsByTeam.map(([teamId, teamSubmissions]) => (
+          <TabsContent key={teamId} value={teamId} className="min-w-0">
+            <div className="min-w-0 overflow-x-auto pb-2">
+              <div className="flex min-w-max gap-4">
+                <SubmissionTeamLane
+                  submissions={teamSubmissions}
+                  challenge={snapshot.challenge}
+                  teamName={teamNameById.get(teamId) ?? teamId.slice(0, 8)}
+                  blackboardSelectedSubmissionId={blackboardSelectedSubmissionId}
+                  onBoard={mode === "submission"}
+                  playingSubmissionId={playingSubmissionId}
+                  isPlayingSubmission={isPlayingSubmission}
+                  onPlaySubmission={onPlaySubmission}
+                />
+              </div>
+            </div>
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   )
 }
 
-function ReplayStat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="rounded-[0.875rem] border border-border bg-background/75 px-2 py-2 shadow-[1px_1px_0_rgba(23,35,58,0.08)]">
-      <div className="text-[0.65rem] font-black uppercase tracking-[0.18em] text-muted-foreground">{label}</div>
-      <div className="font-mono text-xl font-black tabular-nums">{value}</div>
-    </div>
-  )
-}
-
-function SubmissionReplayCard({
-  submission,
+function SubmissionTeamLane({
+  submissions,
+  challenge,
   teamName,
-  selected,
+  blackboardSelectedSubmissionId,
   onBoard,
-  onSelect,
+  playingSubmissionId,
+  isPlayingSubmission,
+  onPlaySubmission,
 }: {
-  submission: GameSubmission
+  submissions: GameSubmission[]
+  challenge: GameStateResponse["challenge"]
   teamName: string
-  selected: boolean
+  blackboardSelectedSubmissionId: string | null
   onBoard: boolean
-  onSelect: () => void
+  playingSubmissionId: string | null
+  isPlayingSubmission: boolean
+  onPlaySubmission: (submissionId: string) => void
 }) {
+  const [localSubmissionId, setLocalSubmissionId] = useState<string | null>(null)
+  const boardSubmission = blackboardSelectedSubmissionId
+    ? submissions.find((submission) => submission.id === blackboardSelectedSubmissionId) ?? null
+    : null
+  const localSubmission = localSubmissionId
+    ? submissions.find((submission) => submission.id === localSubmissionId) ?? null
+    : null
+  const latestPlayableSubmission = submissions.find(canPlaySubmission) ?? null
+  const selectedSubmission = localSubmission ?? boardSubmission ?? latestPlayableSubmission ?? submissions[0] ?? null
+  const selectedCanPlay = selectedSubmission ? canPlaySubmission(selectedSubmission) : false
+  const isSelectedOnBoard = Boolean(selectedSubmission && onBoard && selectedSubmission.id === blackboardSelectedSubmissionId)
+  const playableCount = submissions.filter(canPlaySubmission).length
+
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={cn(
-        "group grid gap-3 rounded-[1rem] border-2 p-3 text-left shadow-[2px_2px_0_rgba(23,35,58,0.1)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[4px_4px_0_rgba(23,35,58,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        selected ? "border-primary bg-primary/10" : onBoard ? "border-primary bg-card" : "border-ink bg-card",
-      )}
-    >
+    <article className={cn(
+      "grid w-[24rem] shrink-0 gap-3 rounded-[1rem] border-2 bg-card p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]",
+      isSelectedOnBoard ? "border-primary" : "border-ink",
+    )}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate font-black">{teamName}</div>
-          <div className="text-sm font-semibold text-muted-foreground">
-            第 {submission.attempt_no} 次嘗試 / {formatSubmissionTime(submission.created_at)}
-          </div>
+          <div className="text-sm font-semibold text-muted-foreground">{playableCount}/{submissions.length} 可播放</div>
         </div>
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          {onBoard ? <Badge className="font-black">黑板顯示中</Badge> : null}
-          <Badge variant={submission.status === "completed" ? "secondary" : "outline"} className="font-black">
-            {submissionStatusLabel(submission)}
-          </Badge>
+        <Badge variant={isSelectedOnBoard ? "secondary" : "outline"} className="font-black">
+          {isSelectedOnBoard ? "黑板顯示中" : `${submissions.length} 筆`}
+        </Badge>
+      </div>
+      {selectedSubmission ? (
+        <SubmissionPreview
+          submission={selectedSubmission}
+          challenge={challenge}
+          title="提交畫面"
+          sourceLabel={`${submissionStatusLabel(selectedSubmission)} / ${formatSubmissionTime(selectedSubmission.created_at)}`}
+          className="h-64"
+          viewportClassName="h-[calc(100%-4.5rem)]"
+          animated={selectedCanPlay}
+          animationKey={`admin-submission:${selectedSubmission.id}`}
+          showTurtle={selectedCanPlay}
+        />
+      ) : (
+        <EmptyPanel title="尚未有提交作品" description="這個小隊還沒有提交繪圖。" />
+      )}
+      <div className="min-w-0 overflow-x-auto pb-1">
+        <div className="flex gap-2">
+          {submissions.map((submission) => (
+            <button
+              key={submission.id}
+              type="button"
+              onClick={() => setLocalSubmissionId(submission.id)}
+              className={cn(
+                "min-w-28 rounded-[0.875rem] border px-3 py-2 text-left text-xs font-black shadow-[1px_1px_0_rgba(23,35,58,0.08)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                selectedSubmission?.id === submission.id ? "border-primary bg-primary/10" : "border-border bg-background/80 hover:bg-surface-raised",
+              )}
+            >
+              <div className="font-mono">#{submission.attempt_no}</div>
+              <div className="mt-1 truncate text-muted-foreground">{formatSubmissionTime(submission.created_at)}</div>
+              <div className="mt-1 truncate text-muted-foreground">{submissionStatusLabel(submission)}</div>
+            </button>
+          ))}
         </div>
       </div>
-      <div className="aspect-[4/3] overflow-hidden rounded-[0.875rem] border-2 border-ink bg-background">
-        {submission.result_image_url ? (
-          <img
-            src={submission.result_image_url}
-            alt={`${teamName} 第 ${submission.attempt_no} 次嘗試`}
-            className="h-full w-full object-contain transition duration-200 group-hover:scale-[1.02]"
-          />
+      <Button
+        disabled={!selectedSubmission || !selectedCanPlay || isPlayingSubmission}
+        onClick={() => selectedSubmission ? onPlaySubmission(selectedSubmission.id) : undefined}
+      >
+        {isPlayingSubmission && playingSubmissionId === selectedSubmission?.id ? (
+          <Loader2Icon data-icon="inline-start" className="animate-spin" />
         ) : (
-          <div className="flex h-full items-center justify-center px-4 text-center text-sm font-semibold text-muted-foreground">
-            {submission.error_message ?? "正在準備軌跡"}
-          </div>
+          <PlayIcon data-icon="inline-start" />
         )}
-      </div>
-    </button>
+        {isSelectedOnBoard ? "正在黑板上" : "播放至黑板"}
+      </Button>
+    </article>
   )
 }
 
@@ -1366,6 +1325,10 @@ function compareSubmissionRecency(left: GameSubmission, right: GameSubmission) {
     left.attempt_no - right.attempt_no ||
     left.id.localeCompare(right.id)
   )
+}
+
+function canPlaySubmission(submission: GameSubmission) {
+  return submission.status === "completed" && Boolean(submission.trace)
 }
 
 function submissionStatusLabel(submission: GameSubmission) {
