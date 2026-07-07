@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { PowerIcon, Trash2Icon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -233,9 +234,21 @@ export default function AdminTeamsPage() {
     onError: (error) => setActionError(errorMessage(error)),
   })
 
-  const disableTeam = useMutation({
-    mutationFn: (team: Team) => adminApi.disableTeam(team.id),
-    onSuccess: () => invalidateTeams(),
+  const setTeamEnabled = useMutation({
+    mutationFn: (team: Team) => (team.enabled ? adminApi.disableTeam(team.id) : adminApi.enableTeam(team.id)),
+    onSuccess: () => {
+      setActionError(null)
+      invalidateTeams()
+    },
+    onError: (error) => setActionError(errorMessage(error)),
+  })
+
+  const deleteTeam = useMutation({
+    mutationFn: (team: Team) => adminApi.deleteTeam(team.id),
+    onSuccess: () => {
+      setActionError(null)
+      invalidateTeams()
+    },
     onError: (error) => setActionError(errorMessage(error)),
   })
 
@@ -249,7 +262,7 @@ export default function AdminTeamsPage() {
         <div>
           <h1 className="font-heading text-2xl font-semibold tracking-tight">Teams</h1>
           <p className="text-sm text-muted-foreground">
-            Search, create, bulk-create, edit, rotate login codes, and disable teams.
+            Search, create, bulk-create, edit, rotate login codes, disable logins, and delete teams.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -351,7 +364,7 @@ export default function AdminTeamsPage() {
                     <TableCell className="text-right font-medium">{team.total_score}</TableCell>
                     <TableCell>{formatDate(team.updated_at)}</TableCell>
                     <TableCell>
-                      <div className="flex justify-end gap-2">
+                      <div className="flex flex-wrap justify-end gap-2">
                         <Button variant="outline" size="sm" onClick={() => setEditingTeam(team)}>
                           Edit
                         </Button>
@@ -365,14 +378,34 @@ export default function AdminTeamsPage() {
                           <Button variant="outline" size="sm">Rotate</Button>
                         </ConfirmAction>
                         <ConfirmAction
-                          title="Disable team"
-                          description={`${team.name} will no longer be able to log in.`}
-                          confirmLabel="Disable"
-                          destructive
-                          disabled={!team.enabled || disableTeam.isPending}
-                          onConfirm={() => disableTeam.mutate(team)}
+                          title={team.enabled ? "Disable team" : "Enable team"}
+                          description={
+                            team.enabled
+                              ? `${team.name} will not be able to log in, submit, or vote until enabled again.`
+                              : `${team.name} will be able to log in, submit, and vote again.`
+                          }
+                          confirmLabel={team.enabled ? "Disable" : "Enable"}
+                          destructive={team.enabled}
+                          disabled={setTeamEnabled.isPending}
+                          onConfirm={() => setTeamEnabled.mutate(team)}
                         >
-                          <Button variant="destructive" size="sm">Disable</Button>
+                          <Button variant={team.enabled ? "outline" : "default"} size="sm">
+                            <PowerIcon data-icon="inline-start" />
+                            {team.enabled ? "Disable" : "Enable"}
+                          </Button>
+                        </ConfirmAction>
+                        <ConfirmAction
+                          title="Delete team permanently"
+                          description={`${team.name} and its submissions, scores, and active game references will be permanently deleted.`}
+                          confirmLabel="Delete permanently"
+                          destructive
+                          disabled={deleteTeam.isPending}
+                          onConfirm={() => deleteTeam.mutate(team)}
+                        >
+                          <Button variant="destructive" size="sm">
+                            <Trash2Icon data-icon="inline-start" />
+                            Delete
+                          </Button>
                         </ConfirmAction>
                       </div>
                     </TableCell>

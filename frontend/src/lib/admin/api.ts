@@ -114,7 +114,16 @@ export const adminApi = {
     return request<Team>(`/api/v1/admin/teams/${id}`, { method: "PATCH", body: jsonBody(input) })
   },
   disableTeam(id: string) {
-    return request<{ disabled: boolean; team: Team }>(`/api/v1/admin/teams/${id}`, { method: "DELETE" })
+    return request<Team>(`/api/v1/admin/teams/${id}`, { method: "PATCH", body: jsonBody({ enabled: false }) })
+  },
+  enableTeam(id: string) {
+    return request<Team>(`/api/v1/admin/teams/${id}`, { method: "PATCH", body: jsonBody({ enabled: true }) })
+  },
+  deleteTeam(id: string) {
+    return request<{ deleted: boolean; team_id: string; deleted_submission_count: number }>(
+      `/api/v1/admin/teams/${id}`,
+      { method: "DELETE" },
+    )
   },
   rotateTeamCode(id: string) {
     return request<{ team: Team; login_code: string }>(`/api/v1/admin/teams/${id}/rotate-code`, { method: "POST" })
