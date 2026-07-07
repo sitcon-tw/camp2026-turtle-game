@@ -167,27 +167,16 @@ export type BlackboardState = {
   selected_submission_id: string | null
   game: GameStateResponse
   teams: BlackboardTeam[]
-  stream_sessions: BlackboardStreamSession[]
   preview_sessions: BlackboardPreviewSession[]
   leaderboard: LeaderboardEntry[]
 }
 
-export type BlackboardDisplayMode = "submission" | "stream" | "preview"
+export type BlackboardDisplayMode = "submission" | "preview"
 
 export type BlackboardDisplay = {
   mode: BlackboardDisplayMode
   selected_submission_id: string | null
-  selected_stream_session_id: string | null
   selected_preview_run_id: string | null
-}
-
-export type BlackboardStreamSession = {
-  session_id: string
-  team_id: string
-  device_id: string
-  label: string
-  connected: boolean
-  last_seen_at: Timestamp
 }
 
 export type BlackboardPreviewRun = {
@@ -213,6 +202,5 @@ export type BlackboardPreviewSession = {
 export type BlackboardControlState = {
   display: BlackboardDisplay
   selected_submission_id: string | null
-  stream_sessions: BlackboardStreamSession[]
   preview_sessions: BlackboardPreviewSession[]
 }

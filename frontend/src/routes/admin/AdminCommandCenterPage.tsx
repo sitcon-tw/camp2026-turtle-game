@@ -1,16 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import type { RefObject } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ClockIcon,
   Loader2Icon,
   PlayIcon,
   RefreshCwIcon,
-  ScreenShareIcon,
   StepForwardIcon,
   TrophyIcon,
-  WifiIcon,
-  WifiOffIcon,
   XIcon,
 } from "lucide-react"
 
@@ -30,14 +26,11 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { adminPreviewViewerSocketUrl, useBlackboardStreamViewer } from "@/hooks/use-blackboard-stream-viewer"
 import { adminApi, errorMessage } from "@/lib/admin/api"
-import { getAdminToken } from "@/lib/admin/session"
 import type { Challenge, Team } from "@/lib/admin/types"
 import type {
   BlackboardDisplayMode,
   BlackboardPreviewSession,
-  BlackboardStreamSession,
   GamePhase,
   GameStateResponse,
   GameSubmission,
@@ -277,9 +270,7 @@ export default function AdminCommandCenterPage() {
         mode={blackboardControl.data?.display.mode ?? blackboard.data?.display.mode ?? "submission"}
         selectedReplaySubmissionId={selectedSubmissionId}
         blackboardSelectedSubmissionId={blackboardControl.data?.display.selected_submission_id ?? blackboard.data?.selected_submission_id ?? null}
-        selectedStreamSessionId={blackboardControl.data?.display.selected_stream_session_id ?? blackboard.data?.display.selected_stream_session_id ?? null}
         selectedPreviewRunId={blackboardControl.data?.display.selected_preview_run_id ?? blackboard.data?.display.selected_preview_run_id ?? null}
-        streamSessions={blackboardControl.data?.stream_sessions ?? blackboard.data?.stream_sessions ?? []}
         previewSessions={blackboardControl.data?.preview_sessions ?? blackboard.data?.preview_sessions ?? []}
         teamNameById={teamNameById}
         isPending={setBlackboardDisplay.isPending}
@@ -289,7 +280,6 @@ export default function AdminCommandCenterPage() {
         onSelectSubmission={(submissionId) => setSelectedReplayCue({ roundId: currentRoundId, submissionId })}
         onPlaySubmission={(submissionId) => playSubmission.mutate(submissionId)}
         onClearBlackboard={() => clearBlackboardPlayback.mutate()}
-        onSelectStream={(streamSessionId) => setBlackboardDisplay.mutate({ mode: "stream", stream_session_id: streamSessionId })}
         onSelectPreviewRun={(previewRunId) => setBlackboardDisplay.mutate({ mode: "preview", preview_run_id: previewRunId })}
         onRefresh={() => {
           void Promise.all([
@@ -567,9 +557,7 @@ function BlackboardControlPanel({
   mode,
   selectedReplaySubmissionId,
   blackboardSelectedSubmissionId,
-  selectedStreamSessionId,
   selectedPreviewRunId,
-  streamSessions,
   previewSessions,
   teamNameById,
   isPending,
@@ -579,7 +567,6 @@ function BlackboardControlPanel({
   onSelectSubmission,
   onPlaySubmission,
   onClearBlackboard,
-  onSelectStream,
   onSelectPreviewRun,
   onRefresh,
 }: {
@@ -588,9 +575,7 @@ function BlackboardControlPanel({
   mode: BlackboardDisplayMode
   selectedReplaySubmissionId: string | null
   blackboardSelectedSubmissionId: string | null
-  selectedStreamSessionId: string | null
   selectedPreviewRunId: string | null
-  streamSessions: BlackboardStreamSession[]
   previewSessions: BlackboardPreviewSession[]
   teamNameById: Map<string, string>
   isPending: boolean
@@ -600,50 +585,23 @@ function BlackboardControlPanel({
   onSelectSubmission: (submissionId: string) => void
   onPlaySubmission: (submissionId: string) => void
   onClearBlackboard: () => void
-  onSelectStream: (streamSessionId: string) => void
   onSelectPreviewRun: (previewRunId: string) => void
   onRefresh: () => void
 }) {
   const [activeTab, setActiveTab] = useState<BlackboardDisplayMode>(mode)
-  const [activeStreamTeamId, setActiveStreamTeamId] = useState<string | null>(null)
   const blackboardSubmission = blackboardSelectedSubmissionId
     ? snapshot.round_submissions.find((submission) => submission.id === blackboardSelectedSubmissionId) ?? null
-    : null
-  const selectedStreamSession = selectedStreamSessionId
-    ? streamSessions.find((session) => session.session_id === selectedStreamSessionId) ?? null
     : null
   const selectedPreviewRun = selectedPreviewRunId
     ? previewSessions.flatMap((session) => session.runs).find((run) => run.id === selectedPreviewRunId) ?? null
     : null
-  const blackboardOutputLabel = mode === "stream"
-    ? selectedStreamSession
-      ? `${teamNameById.get(selectedStreamSession.team_id) ?? selectedStreamSession.team_id.slice(0, 8)} ${selectedStreamSession.label}`
-      : "即時串流"
-    : mode === "preview"
-      ? selectedPreviewRun
-        ? `${teamNameById.get(selectedPreviewRun.team_id) ?? selectedPreviewRun.team_id.slice(0, 8)} preview`
-        : "預覽作品"
+  const blackboardOutputLabel = mode === "preview"
+    ? selectedPreviewRun
+      ? `${teamNameById.get(selectedPreviewRun.team_id) ?? selectedPreviewRun.team_id.slice(0, 8)} preview`
+      : "預覽作品"
     : blackboardSubmission
       ? `${teamNameById.get(blackboardSubmission.team_id) ?? blackboardSubmission.team_id.slice(0, 8)} #${blackboardSubmission.attempt_no}`
       : "提交統計"
-  const sessionsByTeam = useMemo(() => {
-    const grouped = new Map<string, BlackboardStreamSession[]>()
-    for (const session of streamSessions) {
-      const sessions = grouped.get(session.team_id) ?? []
-      sessions.push(session)
-      grouped.set(session.team_id, sessions)
-    }
-    return [...grouped.entries()].sort((left, right) => {
-      const leftName = teamNameById.get(left[0]) ?? left[0]
-      const rightName = teamNameById.get(right[0]) ?? right[0]
-      return leftName.localeCompare(rightName)
-    })
-  }, [streamSessions, teamNameById])
-  const firstStreamTeamId = sessionsByTeam[0]?.[0] ?? null
-  const selectedStreamTeamId = sessionsByTeam.some(([teamId]) => teamId === activeStreamTeamId)
-    ? activeStreamTeamId
-    : firstStreamTeamId
-
   return (
     <Card>
       <CardHeader className="border-b">
@@ -667,23 +625,19 @@ function BlackboardControlPanel({
               {phaseLabel(snapshot.state.phase)} / {snapshot.challenge?.title ?? "目前沒有進行中的挑戰題目"} / {formatTimerValue(snapshot.state.phase_ends_at, snapshot.state.server_now)}
             </div>
           </div>
-          <Badge variant={mode === "stream" ? "secondary" : "outline"} className="w-fit font-black">
-            {mode === "stream" ? "即時串流" : mode === "preview" ? "預覽作品" : blackboardSubmission ? "提交重播" : "統計"}
+          <Badge variant={mode === "preview" ? "secondary" : "outline"} className="w-fit font-black">
+            {mode === "preview" ? "預覽作品" : blackboardSubmission ? "提交重播" : "統計"}
           </Badge>
         </div>
         <Tabs
           value={activeTab}
           onValueChange={(value) => {
-            if (value === "submission" || value === "stream" || value === "preview") {
+            if (value === "submission" || value === "preview") {
               setActiveTab(value)
             }
           }}
         >
           <TabsList className="w-full flex-wrap justify-start">
-            <TabsTrigger value="stream">
-              <ScreenShareIcon data-icon="inline-start" />
-              即時串流
-            </TabsTrigger>
             <TabsTrigger value="submission">
               <PlayIcon data-icon="inline-start" />
               提交作品
@@ -693,44 +647,6 @@ function BlackboardControlPanel({
               預覽作品
             </TabsTrigger>
           </TabsList>
-          <TabsContent value="stream" className="mt-4">
-            {sessionsByTeam.length === 0 ? (
-              <EmptyPanel title="沒有串流工作階段" description="隊伍開啟螢幕串流後，隊伍工作站會顯示在這裡。" />
-            ) : (
-              <Tabs
-                value={selectedStreamTeamId ?? undefined}
-                onValueChange={setActiveStreamTeamId}
-                orientation="vertical"
-                className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]"
-              >
-                <TabsList className="w-full">
-                  {sessionsByTeam.map(([teamId, sessions]) => (
-                    <TabsTrigger key={teamId} value={teamId} className="justify-start">
-                      {teamNameById.get(teamId) ?? teamId.slice(0, 8)}
-                      <Badge variant="outline" className="ml-auto">{sessions.length}</Badge>
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-                {sessionsByTeam.map(([teamId, sessions]) => (
-                  <TabsContent key={teamId} value={teamId}>
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {sessions.map((session) => (
-                        <StreamSessionCard
-                          key={session.session_id}
-                          session={session}
-                          teamName={teamNameById.get(session.team_id) ?? session.team_id.slice(0, 8)}
-                          selected={session.session_id === selectedStreamSessionId && mode === "stream"}
-                          previewEnabled={activeTab === "stream" && selectedStreamTeamId === teamId}
-                          isPending={isPending}
-                          onSelect={() => onSelectStream(session.session_id)}
-                        />
-                      ))}
-                    </div>
-                  </TabsContent>
-                ))}
-              </Tabs>
-            )}
-          </TabsContent>
           <TabsContent value="submission" className="mt-4">
             <SubmissionReplayDeck
               snapshot={snapshot}
@@ -762,145 +678,6 @@ function BlackboardControlPanel({
       </CardContent>
     </Card>
   )
-}
-
-function StreamSessionCard({
-  session,
-  teamName,
-  selected,
-  previewEnabled,
-  isPending,
-  onSelect,
-}: {
-  session: BlackboardStreamSession
-  teamName: string
-  selected: boolean
-  previewEnabled: boolean
-  isPending: boolean
-  onSelect: () => void
-}) {
-  const {
-    containerRef: previewContainerRef,
-    videoRef: previewVideoRef,
-    isVisible: previewVisible,
-    status: previewStatus,
-    fps: previewFps,
-    targetFps: previewTargetFps,
-  } = useAdminPreviewStream(session.session_id, previewEnabled && session.connected)
-  const isPreviewLive = previewStatus === "live"
-  return (
-    <article
-      className={cn(
-        "grid gap-3 rounded-[1rem] border-2 bg-card p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]",
-        selected ? "border-primary" : "border-ink",
-      )}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate font-black">{teamName}</div>
-          <div className="text-sm font-semibold text-muted-foreground">{session.label}</div>
-        </div>
-        <Badge variant={session.connected ? "secondary" : "outline"} className="font-black">
-          {session.connected ? <WifiIcon data-icon="inline-start" /> : <WifiOffIcon data-icon="inline-start" />}
-          {session.connected ? "即時" : "離線"}
-        </Badge>
-      </div>
-      <StreamSessionThumbnail
-        containerRef={previewContainerRef}
-        videoRef={previewVideoRef}
-        alt={`${teamName} ${session.label}`}
-        isLive={isPreviewLive}
-        statusLabel={thumbnailStatusLabel(previewEnabled && session.connected, previewVisible, previewStatus)}
-      />
-      <div className="grid grid-cols-3 gap-2 text-center">
-        <ReplayStat label="目標 FPS" value={previewTargetFps ? `${previewTargetFps} fps` : "2 fps"} />
-        <ReplayStat label="目前 FPS" value={previewFps ? Math.round(previewFps) : "-"} />
-        <ReplayStat label="最後更新" value={formatSubmissionTime(session.last_seen_at)} />
-      </div>
-      <Button disabled={isPending || !session.connected} onClick={onSelect}>
-        {isPending && selected ? <Loader2Icon data-icon="inline-start" className="animate-spin" /> : <ScreenShareIcon data-icon="inline-start" />}
-        {selected ? "正在黑板上" : "串流到黑板"}
-      </Button>
-    </article>
-  )
-}
-
-function useAdminPreviewStream(sessionId: string, enabled: boolean) {
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  const isVisible = useElementVisible(containerRef)
-  const token = getAdminToken()
-  const hello = useMemo(() => token ? { type: "hello", token } : null, [token])
-  const streamMedia = useBlackboardStreamViewer({
-    sessionId,
-    enabled: enabled && isVisible && Boolean(token),
-    url: adminPreviewViewerSocketUrl(sessionId),
-    hello,
-  })
-
-  return {
-    containerRef,
-    isVisible,
-    ...streamMedia,
-  }
-}
-
-function StreamSessionThumbnail({
-  containerRef,
-  videoRef,
-  alt,
-  isLive,
-  statusLabel,
-}: {
-  containerRef: RefObject<HTMLDivElement | null>
-  videoRef: RefObject<HTMLVideoElement | null>
-  alt: string
-  isLive: boolean
-  statusLabel: string
-}) {
-  return (
-    <div ref={containerRef} className="aspect-video overflow-hidden rounded-[0.875rem] border-2 border-ink bg-background">
-      <video
-        ref={videoRef}
-        aria-label={alt}
-        autoPlay
-        muted
-        playsInline
-        className={cn("h-full w-full object-contain", isLive ? "block" : "hidden")}
-      />
-      {!isLive ? (
-        <div className="flex h-full items-center justify-center px-4 text-center text-sm font-semibold text-muted-foreground">
-          {statusLabel}
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function useElementVisible(ref: RefObject<Element | null>) {
-  const [isVisible, setIsVisible] = useState(() => typeof IntersectionObserver === "undefined")
-
-  useEffect(() => {
-    const element = ref.current
-    if (!element) return
-    if (typeof IntersectionObserver === "undefined") return
-    const observer = new IntersectionObserver(
-      ([entry]) => setIsVisible(Boolean(entry?.isIntersecting)),
-      { rootMargin: "160px", threshold: 0.1 },
-    )
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [ref])
-
-  return isVisible
-}
-
-function thumbnailStatusLabel(enabled: boolean, isVisible: boolean, status: string) {
-  if (!enabled) return "串流離線"
-  if (!isVisible) return "預覽已暫停"
-  if (status === "unsupported") return "WebRTC 不支援"
-  if (status === "error") return "預覽無法使用"
-  if (status === "connecting") return "正在連線預覽"
-  return "等待預覽"
 }
 
 function PreviewRunDeck({
@@ -1244,7 +1021,7 @@ function SubmissionReplayDeck({
                     : "提交統計"}
                 </div>
                 <div className="mt-1 text-xs font-bold text-muted-foreground">
-                  {mode === "stream" ? "目前正在顯示即時串流" : blackboardSubmission ? "目前正在播放重播" : "正在顯示預設統計"}
+                  {blackboardSubmission ? "目前正在播放重播" : "正在顯示預設統計"}
                 </div>
               </div>
             </div>

@@ -8,7 +8,6 @@ import {
   ClockIcon,
   Loader2Icon,
   PlayIcon,
-  ScreenShareIcon,
   SendIcon,
   VoteIcon,
 } from "lucide-react"
@@ -20,8 +19,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useGameEvents } from "@/hooks/use-game-events"
-import { useTeamScreenStream } from "@/hooks/use-team-screen-stream"
-import type { TeamScreenStreamStatus } from "@/hooks/use-team-screen-stream"
 import { reactBlocklyToolboxCategories, registerTurtleBlocks, workspaceToBackendProgram } from "@/lib/blockly"
 import type { ChallengeCanvas } from "@/lib/blockly"
 import type { GameChallenge, GamePhase, GameStateResponse, GameSubmission, LeaderboardEntry, PublicVoteChoice } from "@/lib/game/types"
@@ -63,7 +60,6 @@ export default function TeamStationPage() {
   const queryClient = useQueryClient()
   const token = getTeamToken()
   const [stationSessionId] = useState(() => getTeamStationSessionId())
-  const screenStream = useTeamScreenStream(token)
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [localPreview, setLocalPreview] = useState<LocalPreviewState>({
     roundId: null,
@@ -258,14 +254,6 @@ export default function TeamStationPage() {
 
   return (
     <div className="mx-auto grid max-w-7xl gap-5 px-4 py-5 sm:px-6">
-      {screenStream.isBlocking ? (
-        <ScreenStreamGate
-          status={screenStream.status}
-          error={screenStream.error}
-          onRequestCapture={screenStream.requestCapture}
-        />
-      ) : null}
-
       <RoundHeader
         snapshot={snapshot}
         team={myTeam}
@@ -354,69 +342,6 @@ export default function TeamStationPage() {
       ) : null}
 
       {snapshot.state.phase === "idle" ? <IdlePanel /> : null}
-    </div>
-  )
-}
-
-function ScreenStreamGate({
-  status,
-  error,
-  onRequestCapture,
-}: {
-  status: TeamScreenStreamStatus
-  error: string | null
-  onRequestCapture: () => void
-}) {
-  const isConnecting = status === "connecting"
-  const unsupported = status === "unsupported"
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/92 px-4 backdrop-blur-sm">
-      <Card className="w-full max-w-2xl">
-        <CardHeader className="border-b">
-          <div className="flex items-start gap-3">
-            <div className="flex size-11 shrink-0 items-center justify-center rounded-[0.875rem] border-2 border-ink bg-surface-raised shadow-[2px_2px_0_rgba(23,35,58,0.12)]">
-              <ScreenShareIcon className="size-5" />
-            </div>
-            <div>
-              <CardTitle>開始前需要分享整個螢幕</CardTitle>
-              <CardDescription>
-                這個活動使用單螢幕直播。請在瀏覽器分享視窗中選擇「整個螢幕」，不要選擇 Chrome 分頁或應用程式視窗。
-              </CardDescription>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="grid gap-4 pt-4">
-          {error ? <div className="rounded-[0.875rem] border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm font-semibold text-destructive">{error}</div> : null}
-          <div className="grid gap-3 rounded-[1rem] border-2 border-ink bg-surface-raised p-4 shadow-[3px_3px_0_rgba(23,35,58,0.1)]">
-            <div className="text-sm font-black uppercase tracking-[0.18em] text-muted-foreground">分享設定</div>
-            <ScreenStreamStep>按下下方按鈕後，瀏覽器會開啟分享選擇視窗。</ScreenStreamStep>
-            <ScreenStreamStep>請切到「整個螢幕」或「Entire screen」分類。</ScreenStreamStep>
-            <ScreenStreamStep>選取唯一的螢幕後按「分享」。系統會拒絕分頁與視窗分享。</ScreenStreamStep>
-          </div>
-          <Button
-            size="lg"
-            disabled={isConnecting || unsupported}
-            onClick={onRequestCapture}
-          >
-            {isConnecting ? (
-              <Loader2Icon data-icon="inline-start" className="animate-spin" />
-            ) : (
-              <ScreenShareIcon data-icon="inline-start" />
-            )}
-            {unsupported ? "瀏覽器不支援直播" : isConnecting ? "正在連線" : "分享整個螢幕並開始遊戲"}
-          </Button>
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
-
-function ScreenStreamStep({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex gap-2 text-sm font-semibold text-foreground">
-      <CheckIcon className="mt-0.5 size-4 shrink-0 text-accent-foreground" />
-      <div>{children}</div>
     </div>
   )
 }

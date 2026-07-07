@@ -1,16 +1,13 @@
 import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react"
+import type { CSSProperties, ReactNode, RefObject } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { ClockIcon, CrownIcon, RotateCcwIcon, ScreenShareIcon, TrophyIcon, WifiOffIcon } from "lucide-react"
+import { ClockIcon, CrownIcon, TrophyIcon } from "lucide-react"
 
 import { ChallengeRenderer } from "@/components/turtle"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { publicStreamViewerSocketUrl, useBlackboardStreamViewer } from "@/hooks/use-blackboard-stream-viewer"
 import { adminApi, errorMessage } from "@/lib/admin/api"
 import {
   parseBlackboardEventData,
@@ -30,26 +27,10 @@ import type {
   GameSubmission,
   LeaderboardEntry,
   RoundResultEntry,
-  BlackboardStreamSession,
 } from "@/lib/game/types"
 import { cn } from "@/lib/utils"
 
 const BOARD_ASPECT_RATIO = 16 / 9
-const STREAM_MIN_ZOOM = 1
-const STREAM_MAX_ZOOM = 4
-const STREAM_WHEEL_ZOOM_SENSITIVITY = 0.0012
-
-type StreamViewportTransform = {
-  scale: number
-  x: number
-  y: number
-}
-
-const STREAM_DEFAULT_TRANSFORM: StreamViewportTransform = {
-  scale: STREAM_MIN_ZOOM,
-  x: 0,
-  y: 0,
-}
 
 type TeamArtwork = {
   key: string
@@ -153,13 +134,6 @@ function SubmissionOpenView({
   )
   const selectedPlayback = selectedSubmissionForSubmissionOpen(data, playbackCue)
 
-  if (data.display.mode === "stream") {
-    const session = data.display.selected_stream_session_id
-      ? data.stream_sessions.find((item) => item.session_id === data.display.selected_stream_session_id) ?? null
-      : null
-    return <StreamSpotlightView data={data} session={session} />
-  }
-
   if (data.display.mode === "preview") {
     const selectedPreview = selectedPreviewRunForSubmissionOpen(data, previewCue)
     if (selectedPreview) {
@@ -223,293 +197,6 @@ function PreviewSpotlightView({
       </div>
     </BoardShell>
   )
-}
-
-function StreamSpotlightView({
-  data,
-  session,
-}: {
-  data: BlackboardState
-  session: BlackboardStreamSession | null
-}) {
-  const {
-    videoRef: streamVideoRef,
-    status: streamStatus,
-    fps: streamFps,
-    targetFps: streamTargetFps,
-  } = useBlackboardStreamViewer({
-    sessionId: session?.session_id ?? null,
-    url: session ? publicStreamViewerSocketUrl(session.session_id) : null,
-  })
-  const team = session ? data.teams.find((item) => item.id === session.team_id) : null
-  const title = team ? `${team.name} / ${session?.label ?? "Live"}` : "Live Stream"
-  const hasLiveVideo = streamStatus === "live"
-
-  return (
-    <BoardShell
-      title={title}
-      subtitle={data.game.challenge ? `${data.game.challenge.title} / Live` : "Submission Open Live"}
-    >
-      <div className="grid h-full min-h-0 gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.45fr)]">
-        <section className="animate-in fade-in min-h-0 overflow-hidden rounded-[1rem] border-2 border-ink bg-background duration-300 shadow-[4px_4px_0_rgba(23,35,58,0.14)]">
-          {session ? (
-            <div className="relative h-full w-full">
-              <ZoomableStreamViewport
-                key={session.session_id}
-                ref={streamVideoRef}
-                isLive={hasLiveVideo}
-                label={`${title} live video`}
-              />
-              {!hasLiveVideo ? <StreamWaitingPanel session={session} status={streamStatus} /> : null}
-              {!hasLiveVideo && streamStatus === "connecting" ? (
-                <div className="absolute bottom-3 left-3 rounded-full border border-border bg-card/90 px-3 py-1 text-sm font-black shadow-sm">
-                  Connecting live video
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <StreamWaitingPanel session={session} status={streamStatus} />
-          )}
-        </section>
-        <aside className="animate-in fade-in slide-in-from-right-4 grid min-h-0 content-between gap-3 rounded-[1rem] border-2 border-ink bg-card/95 p-4 duration-500 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
-          <div className="min-w-0">
-            <div className="text-sm font-black uppercase tracking-[0.22em] text-muted-foreground">Now streaming</div>
-            <div className="mt-2 truncate text-4xl font-black lg:text-5xl">{team?.name ?? "No session"}</div>
-            <div className="mt-2 text-xl font-semibold text-muted-foreground">{session?.label ?? "Waiting for host selection"}</div>
-          </div>
-          <div className="grid gap-2">
-            <ReplayMetric label="Status" value={session?.connected ? "Live" : "Disconnected"} />
-            <ReplayMetric label="Target" value={streamTargetFps ? `${streamTargetFps} fps` : "60 fps best effort"} />
-            <ReplayMetric label="Video FPS" value={streamFps ? Math.round(streamFps) : "-"} />
-          </div>
-        </aside>
-      </div>
-    </BoardShell>
-  )
-}
-
-function StreamWaitingPanel({
-  session,
-  status,
-}: {
-  session: BlackboardStreamSession | null
-  status: string
-}) {
-  const message = streamWaitingMessage(session, status)
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
-      {session?.connected ? <ScreenShareIcon className="size-12" /> : <WifiOffIcon className="size-12" />}
-      <div className="text-2xl font-black text-foreground">{message.title}</div>
-      <div className="max-w-xl font-semibold">{message.description}</div>
-    </div>
-  )
-}
-
-function streamWaitingMessage(session: BlackboardStreamSession | null, status: string) {
-  if (!session) {
-    return {
-      title: "尚未選擇直播 session",
-      description: "請在 Command Center 選擇一個已連線的 session。",
-    }
-  }
-  if (!session.connected) {
-    return {
-      title: "直播已離線",
-      description: "學生端直播連線中斷，重新連線後會自動恢復。",
-    }
-  }
-  if (status === "unsupported") {
-    return {
-      title: "瀏覽器不支援直播",
-      description: "請使用支援 WebRTC 的瀏覽器開啟黑板。",
-    }
-  }
-  if (status === "error") {
-    return {
-      title: "直播連線失敗",
-      description: "請確認學生端仍在分享整個螢幕，或重新選擇直播 session。",
-    }
-  }
-  return {
-    title: "等待直播畫面",
-    description: "學生端正在連線，WebRTC 直播建立後會出現在這裡。",
-  }
-}
-
-const ZoomableStreamViewport = forwardRef<HTMLVideoElement, {
-  isLive: boolean
-  label: string
-}>(function ZoomableStreamViewport(
-{
-  isLive,
-  label,
-},
-videoRef,
-) {
-  const viewportRef = useRef<HTMLDivElement | null>(null)
-  const [transform, setTransform] = useState<StreamViewportTransform>(STREAM_DEFAULT_TRANSFORM)
-  const canReset = transform.scale > STREAM_MIN_ZOOM + 0.01 || Math.abs(transform.x) > 0.5 || Math.abs(transform.y) > 0.5
-
-  useEffect(() => {
-    const element = viewportRef.current
-    if (!element) return
-
-    const handleNativeWheel = (event: WheelEvent) => {
-      if (!isLive) return
-      if (event.target instanceof Element && event.target.closest("[data-stream-zoom-controls]")) return
-      event.preventDefault()
-      const rect = element.getBoundingClientRect()
-      const relativeX = event.clientX - rect.left
-      const relativeY = event.clientY - rect.top
-      setTransform((current) => {
-        const nextScale = clampNumber(
-          current.scale * Math.exp(-event.deltaY * STREAM_WHEEL_ZOOM_SENSITIVITY),
-          STREAM_MIN_ZOOM,
-          STREAM_MAX_ZOOM,
-        )
-        return positionStreamTransformForPointer({ ...current, scale: nextScale }, relativeX, relativeY, rect)
-      })
-    }
-
-    element.addEventListener("wheel", handleNativeWheel, { passive: false })
-    return () => element.removeEventListener("wheel", handleNativeWheel)
-  }, [isLive])
-
-  useEffect(() => {
-    const clampToViewport = () => {
-      const rect = viewportRef.current?.getBoundingClientRect()
-      if (!rect) return
-      setTransform((current) => constrainStreamTransform(current, rect))
-    }
-
-    window.addEventListener("resize", clampToViewport)
-    window.visualViewport?.addEventListener("resize", clampToViewport)
-    return () => {
-      window.removeEventListener("resize", clampToViewport)
-      window.visualViewport?.removeEventListener("resize", clampToViewport)
-    }
-  }, [])
-
-  function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
-    const rect = viewportRef.current?.getBoundingClientRect()
-    if (!isLive || !rect) return
-    const relativeX = event.clientX - rect.left
-    const relativeY = event.clientY - rect.top
-    setTransform((current) => positionStreamTransformForPointer(current, relativeX, relativeY, rect))
-  }
-
-  function resetTransform() {
-    setTransform(STREAM_DEFAULT_TRANSFORM)
-  }
-
-  return (
-    <div
-      ref={viewportRef}
-      className={cn(
-        "absolute inset-0 overflow-hidden touch-none select-none",
-        isLive ? "bg-background" : "pointer-events-none",
-      )}
-      onPointerMove={handlePointerMove}
-      onDoubleClick={resetTransform}
-    >
-      <div
-        className={cn("absolute inset-0", isLive ? "block" : "hidden")}
-        style={{
-          transform: `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`,
-          transformOrigin: "center center",
-          willChange: transform.scale > STREAM_MIN_ZOOM ? "transform" : undefined,
-        }}
-      >
-        <video
-          ref={videoRef}
-          aria-label={label}
-          autoPlay
-          muted
-          playsInline
-          className="h-full w-full bg-background object-contain"
-        />
-      </div>
-      {isLive ? (
-        <div
-          data-stream-zoom-controls
-          className="absolute bottom-3 left-3 flex items-center gap-1 rounded-full border border-border bg-card/90 p-1 shadow-sm backdrop-blur"
-          onPointerDown={(event) => event.stopPropagation()}
-          onWheel={(event) => event.stopPropagation()}
-        >
-          <Badge variant="outline" className="h-8 bg-background/80 font-mono font-black tabular-nums">
-            {Math.round(transform.scale * 100)}%
-          </Badge>
-          <StreamResetButton label="Fit to screen" disabled={!canReset} onClick={resetTransform}>
-            <RotateCcwIcon data-icon="inline-start" />
-          </StreamResetButton>
-        </div>
-      ) : null}
-    </div>
-  )
-})
-
-function StreamResetButton({
-  label,
-  disabled,
-  onClick,
-  children,
-}: {
-  label: string
-  disabled: boolean
-  onClick: () => void
-  children: ReactNode
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button type="button" variant="outline" size="icon-sm" disabled={disabled} onClick={onClick}>
-            {children}
-            <span className="sr-only">{label}</span>
-          </Button>
-        }
-      />
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  )
-}
-
-function positionStreamTransformForPointer(
-  current: StreamViewportTransform,
-  relativeX: number,
-  relativeY: number,
-  viewport: Pick<DOMRect, "width" | "height">,
-) {
-  const scale = clampNumber(current.scale, STREAM_MIN_ZOOM, STREAM_MAX_ZOOM)
-  if (scale === STREAM_MIN_ZOOM) return STREAM_DEFAULT_TRANSFORM
-  const maxX = ((scale - STREAM_MIN_ZOOM) * viewport.width) / 2
-  const maxY = ((scale - STREAM_MIN_ZOOM) * viewport.height) / 2
-  const ratioX = clampNumber(relativeX / viewport.width, 0, 1)
-  const ratioY = clampNumber(relativeY / viewport.height, 0, 1)
-
-  return {
-    scale,
-    x: maxX * (1 - ratioX * 2),
-    y: maxY * (1 - ratioY * 2),
-  }
-}
-
-function constrainStreamTransform(
-  transform: StreamViewportTransform,
-  viewport: Pick<DOMRect, "width" | "height">,
-) {
-  const scale = clampNumber(transform.scale, STREAM_MIN_ZOOM, STREAM_MAX_ZOOM)
-  const maxX = ((scale - STREAM_MIN_ZOOM) * viewport.width) / 2
-  const maxY = ((scale - STREAM_MIN_ZOOM) * viewport.height) / 2
-  return {
-    scale,
-    x: scale === STREAM_MIN_ZOOM ? 0 : clampNumber(transform.x, -maxX, maxX),
-    y: scale === STREAM_MIN_ZOOM ? 0 : clampNumber(transform.y, -maxY, maxY),
-  }
-}
-
-function clampNumber(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max)
 }
 
 function SubmissionCountGrid({ items }: { items: TeamSubmissionCount[] }) {

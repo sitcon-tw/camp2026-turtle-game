@@ -15,19 +15,11 @@ describe("student station session", () => {
     expect(second).toBe(first)
   })
 
-  it("migrates the legacy stream session id", () => {
-    window.sessionStorage.setItem("turtle-stream-session-id", "stream-session-a")
-
-    expect(getTeamStationSessionId()).toBe("stream-session-a")
-  })
-
-  it("clears the matching station and legacy session ids", () => {
+  it("clears the matching station session id", () => {
     window.sessionStorage.setItem("turtle-team-station-session-id", "session-a")
-    window.sessionStorage.setItem("turtle-stream-session-id", "session-a")
 
     clearTeamStationSessionId("session-a")
 
     expect(window.sessionStorage.getItem("turtle-team-station-session-id")).toBeNull()
-    expect(window.sessionStorage.getItem("turtle-stream-session-id")).toBeNull()
   })
 })

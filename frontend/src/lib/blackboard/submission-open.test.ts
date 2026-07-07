@@ -203,7 +203,6 @@ function blackboardState(roundSubmissions: GameSubmission[], selectedSubmissionI
     display: {
       mode: "submission",
       selected_submission_id: selectedSubmissionId,
-      selected_stream_session_id: null,
       selected_preview_run_id: null,
     },
     selected_submission_id: selectedSubmissionId,
@@ -232,7 +231,6 @@ function blackboardState(roundSubmissions: GameSubmission[], selectedSubmissionI
       results: [],
     },
     teams,
-    stream_sessions: [],
     preview_sessions: [],
     leaderboard: [],
   }
