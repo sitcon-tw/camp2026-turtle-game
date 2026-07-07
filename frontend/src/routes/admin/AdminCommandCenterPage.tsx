@@ -37,6 +37,7 @@ import { getAdminToken } from "@/lib/admin/session"
 import type { Challenge, Team } from "@/lib/admin/types"
 import type {
   BlackboardDisplayMode,
+  BlackboardPreviewSession,
   BlackboardStreamSession,
   GamePhase,
   GameStateResponse,
@@ -288,7 +289,9 @@ export default function AdminCommandCenterPage() {
         selectedReplaySubmissionId={selectedSubmissionId}
         blackboardSelectedSubmissionId={blackboardControl.data?.display.selected_submission_id ?? blackboard.data?.selected_submission_id ?? null}
         selectedStreamSessionId={blackboardControl.data?.display.selected_stream_session_id ?? blackboard.data?.display.selected_stream_session_id ?? null}
+        selectedPreviewRunId={blackboardControl.data?.display.selected_preview_run_id ?? blackboard.data?.display.selected_preview_run_id ?? null}
         streamSessions={blackboardControl.data?.stream_sessions ?? blackboard.data?.stream_sessions ?? []}
+        previewSessions={blackboardControl.data?.preview_sessions ?? blackboard.data?.preview_sessions ?? []}
         teamNameById={teamNameById}
         isPending={setBlackboardDisplay.isPending}
         playingSubmissionId={playSubmission.variables ?? null}
@@ -298,6 +301,7 @@ export default function AdminCommandCenterPage() {
         onPlaySubmission={(submissionId) => playSubmission.mutate(submissionId)}
         onClearBlackboard={() => clearBlackboardPlayback.mutate()}
         onSelectStream={(streamSessionId) => setBlackboardDisplay.mutate({ mode: "stream", stream_session_id: streamSessionId })}
+        onSelectPreviewRun={(previewRunId) => setBlackboardDisplay.mutate({ mode: "preview", preview_run_id: previewRunId })}
         onRefresh={() => {
           void Promise.all([
             queryClient.invalidateQueries({ queryKey: ["game", "state", "admin"] }),
@@ -575,7 +579,9 @@ function BlackboardControlPanel({
   selectedReplaySubmissionId,
   blackboardSelectedSubmissionId,
   selectedStreamSessionId,
+  selectedPreviewRunId,
   streamSessions,
+  previewSessions,
   teamNameById,
   isPending,
   playingSubmissionId,
@@ -585,6 +591,7 @@ function BlackboardControlPanel({
   onPlaySubmission,
   onClearBlackboard,
   onSelectStream,
+  onSelectPreviewRun,
   onRefresh,
 }: {
   snapshot: GameStateResponse
@@ -593,7 +600,9 @@ function BlackboardControlPanel({
   selectedReplaySubmissionId: string | null
   blackboardSelectedSubmissionId: string | null
   selectedStreamSessionId: string | null
+  selectedPreviewRunId: string | null
   streamSessions: BlackboardStreamSession[]
+  previewSessions: BlackboardPreviewSession[]
   teamNameById: Map<string, string>
   isPending: boolean
   playingSubmissionId: string | null
@@ -603,6 +612,7 @@ function BlackboardControlPanel({
   onPlaySubmission: (submissionId: string) => void
   onClearBlackboard: () => void
   onSelectStream: (streamSessionId: string) => void
+  onSelectPreviewRun: (previewRunId: string) => void
   onRefresh: () => void
 }) {
   const [activeTab, setActiveTab] = useState<BlackboardDisplayMode>(mode)
@@ -613,10 +623,17 @@ function BlackboardControlPanel({
   const selectedStreamSession = selectedStreamSessionId
     ? streamSessions.find((session) => session.session_id === selectedStreamSessionId) ?? null
     : null
+  const selectedPreviewRun = selectedPreviewRunId
+    ? previewSessions.flatMap((session) => session.runs).find((run) => run.id === selectedPreviewRunId) ?? null
+    : null
   const blackboardOutputLabel = mode === "stream"
     ? selectedStreamSession
       ? `${teamNameById.get(selectedStreamSession.team_id) ?? selectedStreamSession.team_id.slice(0, 8)} ${selectedStreamSession.label}`
       : "即時串流"
+    : mode === "preview"
+      ? selectedPreviewRun
+        ? `${teamNameById.get(selectedPreviewRun.team_id) ?? selectedPreviewRun.team_id.slice(0, 8)} preview`
+        : "預覽作品"
     : blackboardSubmission
       ? `${teamNameById.get(blackboardSubmission.team_id) ?? blackboardSubmission.team_id.slice(0, 8)} #${blackboardSubmission.attempt_no}`
       : "提交統計"
@@ -662,13 +679,13 @@ function BlackboardControlPanel({
             </div>
           </div>
           <Badge variant={mode === "stream" ? "secondary" : "outline"} className="w-fit font-black">
-            {mode === "stream" ? "即時串流" : blackboardSubmission ? "提交重播" : "統計"}
+            {mode === "stream" ? "即時串流" : mode === "preview" ? "預覽作品" : blackboardSubmission ? "提交重播" : "統計"}
           </Badge>
         </div>
         <Tabs
           value={activeTab}
           onValueChange={(value) => {
-            if (value === "submission" || value === "stream") {
+            if (value === "submission" || value === "stream" || value === "preview") {
               setActiveTab(value)
             }
           }}
@@ -681,6 +698,10 @@ function BlackboardControlPanel({
             <TabsTrigger value="submission">
               <PlayIcon data-icon="inline-start" />
               提交作品
+            </TabsTrigger>
+            <TabsTrigger value="preview">
+              <PlayIcon data-icon="inline-start" />
+              預覽作品
             </TabsTrigger>
           </TabsList>
           <TabsContent value="stream" className="mt-4">
@@ -735,6 +756,17 @@ function BlackboardControlPanel({
               onSelectSubmission={onSelectSubmission}
               onPlaySubmission={onPlaySubmission}
               onClearBlackboard={onClearBlackboard}
+            />
+          </TabsContent>
+          <TabsContent value="preview" className="mt-4">
+            <PreviewRunDeck
+              snapshot={snapshot}
+              mode={mode}
+              previewSessions={previewSessions}
+              teamNameById={teamNameById}
+              selectedPreviewRunId={selectedPreviewRunId}
+              isPending={isPending}
+              onSelectPreviewRun={onSelectPreviewRun}
             />
           </TabsContent>
         </Tabs>
@@ -880,6 +912,184 @@ function thumbnailStatusLabel(enabled: boolean, isVisible: boolean, status: stri
   if (status === "error") return "預覽無法使用"
   if (status === "connecting") return "正在連線預覽"
   return "等待預覽"
+}
+
+function PreviewRunDeck({
+  snapshot,
+  mode,
+  previewSessions,
+  teamNameById,
+  selectedPreviewRunId,
+  isPending,
+  onSelectPreviewRun,
+}: {
+  snapshot: GameStateResponse
+  mode: BlackboardDisplayMode
+  previewSessions: BlackboardPreviewSession[]
+  teamNameById: Map<string, string>
+  selectedPreviewRunId: string | null
+  isPending: boolean
+  onSelectPreviewRun: (previewRunId: string) => void
+}) {
+  const [activePreviewTeamId, setActivePreviewTeamId] = useState<string | null>(null)
+  const sessionsByTeam = useMemo(() => {
+    const grouped = new Map<string, BlackboardPreviewSession[]>()
+    for (const session of previewSessions) {
+      const sessions = grouped.get(session.team_id) ?? []
+      sessions.push(session)
+      grouped.set(session.team_id, sessions)
+    }
+    return [...grouped.entries()].sort((left, right) => {
+      const leftName = teamNameById.get(left[0]) ?? left[0]
+      const rightName = teamNameById.get(right[0]) ?? right[0]
+      return leftName.localeCompare(rightName)
+    })
+  }, [previewSessions, teamNameById])
+  const firstTeamId = sessionsByTeam[0]?.[0] ?? null
+  const selectedTeamId = sessionsByTeam.some(([teamId]) => teamId === activePreviewTeamId)
+    ? activePreviewTeamId
+    : firstTeamId
+
+  if (sessionsByTeam.length === 0) {
+    return (
+      <EmptyPanel
+        title="尚未有預覽作品"
+        description="學生按下預覽後，每個工作站最新 5 筆預覽會出現在這裡。"
+      />
+    )
+  }
+
+  return (
+    <Tabs
+      value={selectedTeamId ?? undefined}
+      onValueChange={setActivePreviewTeamId}
+      orientation="vertical"
+      className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]"
+    >
+      <TabsList className="w-full">
+        {sessionsByTeam.map(([teamId, sessions]) => {
+          const runCount = sessions.reduce((total, session) => total + session.runs.length, 0)
+          return (
+            <TabsTrigger key={teamId} value={teamId} className="justify-start">
+              {teamNameById.get(teamId) ?? teamId.slice(0, 8)}
+              <Badge variant="outline" className="ml-auto">{runCount}</Badge>
+            </TabsTrigger>
+          )
+        })}
+      </TabsList>
+      {sessionsByTeam.map(([teamId, sessions]) => (
+        <TabsContent key={teamId} value={teamId} className="min-w-0">
+          <div className="min-w-0 overflow-x-auto pb-2">
+            <div className="flex min-w-max gap-4">
+              {sessions.map((session) => (
+                <PreviewSessionLane
+                  key={session.session_id}
+                  session={session}
+                  challenge={snapshot.challenge}
+                  teamName={teamNameById.get(session.team_id) ?? session.team_id.slice(0, 8)}
+                  selectedPreviewRunId={selectedPreviewRunId}
+                  onBoard={mode === "preview"}
+                  isPending={isPending}
+                  onSelectPreviewRun={onSelectPreviewRun}
+                />
+              ))}
+            </div>
+          </div>
+        </TabsContent>
+      ))}
+    </Tabs>
+  )
+}
+
+function PreviewSessionLane({
+  session,
+  challenge,
+  teamName,
+  selectedPreviewRunId,
+  onBoard,
+  isPending,
+  onSelectPreviewRun,
+}: {
+  session: BlackboardPreviewSession
+  challenge: GameStateResponse["challenge"]
+  teamName: string
+  selectedPreviewRunId: string | null
+  onBoard: boolean
+  isPending: boolean
+  onSelectPreviewRun: (previewRunId: string) => void
+}) {
+  const [localRunId, setLocalRunId] = useState<string | null>(null)
+  const boardRun = selectedPreviewRunId
+    ? session.runs.find((run) => run.id === selectedPreviewRunId) ?? null
+    : null
+  const localRun = localRunId ? session.runs.find((run) => run.id === localRunId) ?? null : null
+  const selectedRun = localRun ?? boardRun ?? session.runs[0] ?? null
+  const isSelectedOnBoard = Boolean(selectedRun && onBoard && selectedRun.id === selectedPreviewRunId)
+
+  useEffect(() => {
+    if (localRunId && !session.runs.some((run) => run.id === localRunId)) {
+      setLocalRunId(null)
+    }
+  }, [localRunId, session.runs])
+
+  return (
+    <article className={cn(
+      "grid w-[24rem] shrink-0 gap-3 rounded-[1rem] border-2 bg-card p-3 shadow-[2px_2px_0_rgba(23,35,58,0.1)]",
+      isSelectedOnBoard ? "border-primary" : "border-ink",
+    )}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate font-black">{teamName}</div>
+          <div className="text-sm font-semibold text-muted-foreground">{session.label}</div>
+        </div>
+        <Badge variant={isSelectedOnBoard ? "secondary" : "outline"} className="font-black">
+          {isSelectedOnBoard ? "黑板顯示中" : `${session.runs.length} 筆`}
+        </Badge>
+      </div>
+      <TurtlePreviewPanel
+        challenge={challenge}
+        program={selectedRun?.block_program ?? null}
+        title="預覽畫面"
+        sourceLabel={selectedRun ? formatSubmissionTime(selectedRun.created_at) : "empty"}
+        className="h-64"
+        viewportClassName="h-[calc(100%-4.5rem)]"
+        animated
+        animationKey={selectedRun?.id ?? session.session_id}
+        showTarget={false}
+        showTurtle
+      />
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <ReplayStat label="最新預覽" value={formatSubmissionTime(session.latest_preview_at)} />
+        <ReplayStat label="保留" value={`${session.runs.length}/5`} />
+        <ReplayStat label="Session" value={session.label.replace("Session ", "#")} />
+      </div>
+      <div className="min-w-0 overflow-x-auto pb-1">
+        <div className="flex gap-2">
+          {session.runs.map((run, index) => (
+            <button
+              key={run.id}
+              type="button"
+              onClick={() => setLocalRunId(run.id)}
+              className={cn(
+                "min-w-24 rounded-[0.875rem] border px-3 py-2 text-left text-xs font-black shadow-[1px_1px_0_rgba(23,35,58,0.08)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                selectedRun?.id === run.id ? "border-primary bg-primary/10" : "border-border bg-background/80 hover:bg-surface-raised",
+              )}
+            >
+              <div className="font-mono">#{index + 1}</div>
+              <div className="mt-1 truncate text-muted-foreground">{formatSubmissionTime(run.created_at)}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+      <Button
+        disabled={!selectedRun || isPending}
+        onClick={() => selectedRun ? onSelectPreviewRun(selectedRun.id) : undefined}
+      >
+        {isPending && isSelectedOnBoard ? <Loader2Icon data-icon="inline-start" className="animate-spin" /> : <PlayIcon data-icon="inline-start" />}
+        {isSelectedOnBoard ? "正在黑板上" : "送到黑板"}
+      </Button>
+    </article>
+  )
 }
 
 function LiveRoundMonitor({

@@ -1,5 +1,5 @@
 import { clearTeamToken, getTeamToken } from "@/lib/student/session"
-import type { GameStateResponse, GameSubmission, LeaderboardResponse, PublicVoteChoice } from "@/lib/game/types"
+import type { BlackboardPreviewRun, GameStateResponse, GameSubmission, LeaderboardResponse, PublicVoteChoice } from "@/lib/game/types"
 import type {
   ApiErrorBody,
   Team,
@@ -81,6 +81,16 @@ export const studentApi = {
   createCurrentRoundSubmission(blockProgram: unknown) {
     return request<{ submission: GameSubmission }>("/api/v1/game/rounds/current/submissions", {
       method: "POST",
+      body: jsonBody({ block_program: blockProgram }),
+    })
+  },
+  recordCurrentRoundPreviewRun(blockProgram: unknown, input: { sessionId: string; deviceId: string }) {
+    return request<{ preview_run: BlackboardPreviewRun }>("/api/v1/game/rounds/current/preview-runs", {
+      method: "POST",
+      headers: {
+        "x-session-id": input.sessionId,
+        "x-device-id": input.deviceId,
+      },
       body: jsonBody({ block_program: blockProgram }),
     })
   },

@@ -22,14 +22,14 @@ use uuid::Uuid;
 use crate::{
     auth::{AdminUser, verify_token},
     error::AppError,
-    models::{Role, SubmissionId, TeamId},
+    models::{PreviewRunId, Role, SubmissionId, TeamId},
     routes::game::GameStateResponse,
     routes::submissions::{
         LeaderboardEntry, leaderboard_entries, play_completed_submission_for_blackboard,
     },
     state::{
-        AppEvent, AppState, BlackboardDisplay, BlackboardDisplayMode, BlackboardStreamSessionView,
-        BlackboardViewerKind, StoreError,
+        AppEvent, AppState, BlackboardDisplay, BlackboardDisplayMode,
+        BlackboardPreviewSessionView, BlackboardStreamSessionView, BlackboardViewerKind, StoreError,
     },
 };
 
@@ -63,6 +63,7 @@ struct BlackboardState {
     game: GameStateResponse,
     teams: Vec<BlackboardTeam>,
     stream_sessions: Vec<BlackboardStreamSessionView>,
+    preview_sessions: Vec<BlackboardPreviewSessionView>,
     leaderboard: Vec<LeaderboardEntry>,
 }
 
@@ -114,7 +115,19 @@ async fn blackboard_state(
             display.selected_stream_session_id = None;
         }
     }
+    if let Some(preview_run_id) = display.selected_preview_run_id {
+        if state
+            .blackboard
+            .preview_run(preview_run_id, game_snapshot.state.current_round_id)?
+            .is_none()
+        {
+            display = BlackboardDisplay::default();
+        }
+    }
     let selected_submission_id = display.selected_submission_id;
+    let preview_sessions = state
+        .blackboard
+        .preview_sessions(game_snapshot.state.current_round_id)?;
     let game = game_snapshot.into();
 
     Ok(Json(BlackboardState {
@@ -124,6 +137,7 @@ async fn blackboard_state(
         game,
         teams,
         stream_sessions: state.blackboard.stream_sessions()?,
+        preview_sessions,
         leaderboard,
     }))
 }
@@ -156,6 +170,7 @@ struct BlackboardControlState {
     display: BlackboardDisplay,
     selected_submission_id: Option<SubmissionId>,
     stream_sessions: Vec<BlackboardStreamSessionView>,
+    preview_sessions: Vec<BlackboardPreviewSessionView>,
 }
 
 async fn admin_blackboard_control(
@@ -163,10 +178,17 @@ async fn admin_blackboard_control(
     State(state): State<AppState>,
 ) -> Result<Json<BlackboardControlState>, AppError> {
     let display = state.blackboard.display()?;
+    let current_round_id = state
+        .game
+        .snapshot(state.repository.as_ref(), None)
+        .map_err(|error| AppError::internal(format!("game snapshot is unavailable: {error}")))?
+        .state
+        .current_round_id;
     Ok(Json(BlackboardControlState {
         selected_submission_id: display.selected_submission_id,
         display,
         stream_sessions: state.blackboard.stream_sessions()?,
+        preview_sessions: state.blackboard.preview_sessions(current_round_id)?,
     }))
 }
 
@@ -175,6 +197,7 @@ struct SetBlackboardDisplayRequest {
     mode: BlackboardDisplayMode,
     submission_id: Option<SubmissionId>,
     stream_session_id: Option<String>,
+    preview_run_id: Option<PreviewRunId>,
 }
 
 async fn set_blackboard_display(
@@ -182,6 +205,12 @@ async fn set_blackboard_display(
     State(state): State<AppState>,
     Json(payload): Json<SetBlackboardDisplayRequest>,
 ) -> Result<Json<BlackboardControlState>, AppError> {
+    let current_round_id = state
+        .game
+        .snapshot(state.repository.as_ref(), None)
+        .map_err(|error| AppError::internal(format!("game snapshot is unavailable: {error}")))?
+        .state
+        .current_round_id;
     let display = match payload.mode {
         BlackboardDisplayMode::Submission => {
             if let Some(submission_id) = payload.submission_id {
@@ -190,6 +219,7 @@ async fn set_blackboard_display(
                     mode: BlackboardDisplayMode::Submission,
                     selected_submission_id: Some(submission_id),
                     selected_stream_session_id: None,
+                    selected_preview_run_id: None,
                 }
             } else {
                 BlackboardDisplay::default()
@@ -207,6 +237,22 @@ async fn set_blackboard_display(
                 mode: BlackboardDisplayMode::Stream,
                 selected_submission_id: None,
                 selected_stream_session_id: Some(session_id),
+                selected_preview_run_id: None,
+            }
+        }
+        BlackboardDisplayMode::Preview => {
+            let preview_run_id = payload
+                .preview_run_id
+                .ok_or_else(|| AppError::bad_request("preview_run_id is required"))?;
+            state
+                .blackboard
+                .preview_run(preview_run_id, current_round_id)?
+                .ok_or_else(|| AppError::not_found("preview run was not found"))?;
+            BlackboardDisplay {
+                mode: BlackboardDisplayMode::Preview,
+                selected_submission_id: None,
+                selected_stream_session_id: None,
+                selected_preview_run_id: Some(preview_run_id),
             }
         }
     };
@@ -216,6 +262,13 @@ async fn set_blackboard_display(
             .event_bus
             .publish(AppEvent::BlackboardPlaybackChanged {
                 submission_id: display.selected_submission_id,
+            });
+    }
+    if display.mode == BlackboardDisplayMode::Preview {
+        state
+            .event_bus
+            .publish(AppEvent::BlackboardPreviewPlaybackChanged {
+                preview_run_id: display.selected_preview_run_id,
             });
     }
     state.event_bus.publish(AppEvent::BlackboardDisplayChanged {
@@ -229,6 +282,7 @@ async fn set_blackboard_display(
         selected_submission_id: display.selected_submission_id,
         display,
         stream_sessions: state.blackboard.stream_sessions()?,
+        preview_sessions: state.blackboard.preview_sessions(current_round_id)?,
     }))
 }
 
@@ -724,6 +778,7 @@ mod tests {
                 mode: BlackboardDisplayMode::Stream,
                 selected_submission_id: None,
                 selected_stream_session_id: Some("session-a".to_owned()),
+                selected_preview_run_id: None,
             })
             .expect("display should select stream");
         assert!(

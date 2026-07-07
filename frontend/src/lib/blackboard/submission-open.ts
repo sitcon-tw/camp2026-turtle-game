@@ -5,9 +5,15 @@ export type BlackboardReplay = {
   animationKey: string
 }
 
+export type BlackboardPreviewReplay = {
+  previewRunId: string | null
+  animationKey: string
+}
+
 export type BlackboardEventPayload = {
   type?: string
   submission_id?: string | null
+  preview_run_id?: string | null
 }
 
 export type SubmissionCounts = {
@@ -49,6 +55,18 @@ export function playbackCueFromBlackboardEvent(
   }
 }
 
+export function previewCueFromBlackboardEvent(
+  event: BlackboardEventPayload | null,
+  now = Date.now(),
+): BlackboardPreviewReplay | null {
+  if (event?.type !== "blackboard_preview_playback_changed") return null
+
+  return {
+    previewRunId: event.preview_run_id ?? null,
+    animationKey: `preview:${event.preview_run_id ?? "none"}:${now}`,
+  }
+}
+
 export function submissionOpenCountItems(
   teams: BlackboardTeam[],
   submissions: GameSubmission[],
@@ -77,6 +95,28 @@ export function selectedSubmissionForSubmissionOpen(
       playbackCue && playbackCue.submissionId === selectedSubmissionId
         ? playbackCue.animationKey
         : `blackboard-selected:${selectedSubmissionId}`,
+  }
+}
+
+export function selectedPreviewRunForSubmissionOpen(
+  data: BlackboardState,
+  previewCue: BlackboardPreviewReplay | null,
+) {
+  const selectedPreviewRunId = previewCue ? previewCue.previewRunId : data.display.selected_preview_run_id
+  const previewRun = selectedPreviewRunId
+    ? data.preview_sessions
+      .flatMap((session) => session.runs)
+      .find((run) => run.id === selectedPreviewRunId) ?? null
+    : null
+
+  if (!previewRun) return null
+
+  return {
+    previewRun,
+    animationKey:
+      previewCue && previewCue.previewRunId === selectedPreviewRunId
+        ? previewCue.animationKey
+        : `blackboard-selected-preview:${selectedPreviewRunId}`,
   }
 }
 

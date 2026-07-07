@@ -26,7 +26,7 @@ import { reactBlocklyToolboxCategories, registerTurtleBlocks, workspaceToBackend
 import type { ChallengeCanvas } from "@/lib/blockly"
 import type { GameChallenge, GamePhase, GameStateResponse, GameSubmission, LeaderboardEntry, PublicVoteChoice } from "@/lib/game/types"
 import { studentApi, studentErrorMessage } from "@/lib/student/api"
-import { getTeamDeviceId, getTeamToken } from "@/lib/student/session"
+import { getTeamDeviceId, getTeamStationSessionId, getTeamToken } from "@/lib/student/session"
 import type { Team } from "@/lib/student/types"
 
 registerTurtleBlocks()
@@ -62,6 +62,7 @@ type PreviewGateState = {
 export default function TeamStationPage() {
   const queryClient = useQueryClient()
   const token = getTeamToken()
+  const [stationSessionId] = useState(() => getTeamStationSessionId())
   const screenStream = useTeamScreenStream(token)
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [localPreview, setLocalPreview] = useState<LocalPreviewState>({
@@ -179,6 +180,14 @@ export default function TeamStationPage() {
         hasPreviewed: true,
       })
       setActionError(null)
+      void studentApi
+        .recordCurrentRoundPreviewRun(program, {
+          sessionId: stationSessionId,
+          deviceId: getTeamDeviceId(),
+        })
+        .catch((error) => {
+          setActionError(`預覽已更新，但無法同步到黑板控制台：${studentErrorMessage(error)}`)
+        })
     } catch (error) {
       setActionError(studentErrorMessage(error))
     }

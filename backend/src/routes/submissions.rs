@@ -481,6 +481,8 @@ fn event_visible_to_team(state: &AppState, team_id: TeamId, event: &AppEvent) ->
     match event {
         AppEvent::LeaderboardUpdated
         | AppEvent::BlackboardPlaybackChanged { .. }
+        | AppEvent::BlackboardPreviewPlaybackChanged { .. }
+        | AppEvent::BlackboardPreviewRunsChanged { .. }
         | AppEvent::BlackboardDisplayChanged { .. } => false,
         AppEvent::ScoreRecorded { score_event } => score_event.team_id == team_id,
         AppEvent::SubmissionUpdated { submission_id } => state

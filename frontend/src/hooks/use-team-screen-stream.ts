@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
-import { getTeamDeviceId } from "@/lib/student/session"
-
-const STREAM_SESSION_ID_KEY = "turtle-stream-session-id"
+import { clearTeamStationSessionId, getTeamDeviceId, getTeamStationSessionId } from "@/lib/student/session"
 const REQUIRED_DISPLAY_SURFACE = "monitor"
 const PUBLIC_STREAM_TARGET_FPS = 60
 
@@ -86,7 +84,7 @@ export function useTeamScreenStream(token: string | null) {
 
     function connect() {
       if (cancelled) return
-      const sessionId = getStreamSessionId()
+      const sessionId = getTeamStationSessionId()
       setStatus("connecting")
       const socket = new WebSocket(streamSocketUrl())
       activeSocket = socket
@@ -120,7 +118,7 @@ export function useTeamScreenStream(token: string | null) {
           if (payload.type === "stream_error") {
             setError(payload.message ?? "直播連線失敗。")
             if (payload.code === "stream_session_invalid") {
-              clearStreamSessionId(sessionId)
+              clearTeamStationSessionId(sessionId)
               socket.close()
             }
           }
@@ -268,20 +266,6 @@ function screenCaptureErrorMessage(error: unknown) {
     return "你取消或拒絕了畫面直播。請重新開始，並在分享視窗中選擇「整個螢幕」。"
   }
   return error instanceof Error ? error.message : "無法取得畫面直播權限。"
-}
-
-function getStreamSessionId() {
-  const existing = window.sessionStorage.getItem(STREAM_SESSION_ID_KEY)
-  if (existing) return existing
-  const sessionId = crypto.randomUUID()
-  window.sessionStorage.setItem(STREAM_SESSION_ID_KEY, sessionId)
-  return sessionId
-}
-
-function clearStreamSessionId(sessionId: string) {
-  if (window.sessionStorage.getItem(STREAM_SESSION_ID_KEY) === sessionId) {
-    window.sessionStorage.removeItem(STREAM_SESSION_ID_KEY)
-  }
 }
 
 function streamSocketUrl() {
