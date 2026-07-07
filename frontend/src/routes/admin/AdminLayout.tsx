@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom"
 import {
   ArrowLeftIcon,
@@ -9,6 +10,7 @@ import {
   UsersIcon,
 } from "lucide-react"
 
+import { AdminFloatingTimer } from "@/components/admin/AdminFloatingTimer"
 import { AdminHealthPill, LoadingState } from "@/components/admin/AdminPrimitives"
 import { Button } from "@/components/ui/button"
 import {
@@ -28,9 +30,11 @@ import {
   SidebarSeparator,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
+import { useGameEvents } from "@/hooks/use-game-events"
 import { adminApi } from "@/lib/admin/api"
 import { clearAdminToken, getAdminToken } from "@/lib/admin/session"
 import type { AdminMeResponse } from "@/lib/admin/types"
+import type { AdminRouteContext } from "@/routes/admin/admin-route-context"
 
 const navItems = [
   { href: "/admin", label: "指揮中心", icon: Gamepad2Icon },
@@ -46,10 +50,26 @@ function isActivePath(pathname: string, href: string) {
 export default function AdminLayout() {
   const location = useLocation()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [session, setSession] = useState<AdminMeResponse | null>(null)
   const [checking, setChecking] = useState(true)
   const [healthOk, setHealthOk] = useState<boolean | null>(null)
   const token = getAdminToken()
+  const sessionReady = Boolean(token && session)
+
+  const game = useQuery({
+    queryKey: ["game", "state", "admin"],
+    queryFn: adminApi.gameState,
+    enabled: sessionReady,
+    refetchInterval: 10_000,
+  })
+
+  const connectionState = useGameEvents({
+    enabled: sessionReady,
+    token,
+    onSnapshot: (snapshot) => queryClient.setQueryData(["game", "state", "admin"], snapshot),
+    onError: () => undefined,
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -81,6 +101,11 @@ export default function AdminLayout() {
   const activeLabel = useMemo(() => {
     return navItems.find((item) => isActivePath(location.pathname, item.href))?.label ?? "管理後台"
   }, [location.pathname])
+
+  const adminContext = useMemo<AdminRouteContext>(() => ({
+    game,
+    connectionState,
+  }), [connectionState, game])
 
   function handleLogout() {
     clearAdminToken()
@@ -173,8 +198,9 @@ export default function AdminLayout() {
           </Button>
         </header>
         <main className="flex-1 bg-paper p-4 sm:p-6">
-          <Outlet />
+          <Outlet context={adminContext} />
         </main>
+        <AdminFloatingTimer snapshot={game.data} connectionState={connectionState} loading={game.isLoading} />
       </SidebarInset>
     </SidebarProvider>
   )

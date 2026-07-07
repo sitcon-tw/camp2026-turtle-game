@@ -31,7 +31,6 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { adminPreviewViewerSocketUrl, useBlackboardStreamViewer } from "@/hooks/use-blackboard-stream-viewer"
-import { useGameEvents } from "@/hooks/use-game-events"
 import { adminApi, errorMessage } from "@/lib/admin/api"
 import { getAdminToken } from "@/lib/admin/session"
 import type { Challenge, Team } from "@/lib/admin/types"
@@ -45,6 +44,7 @@ import type {
   LeaderboardEntry,
 } from "@/lib/game/types"
 import { cn } from "@/lib/utils"
+import { useAdminRouteContext } from "@/routes/admin/admin-route-context"
 
 type StartRoundForm = {
   challengeId: string
@@ -60,7 +60,7 @@ const defaultStartRoundForm: StartRoundForm = {
 
 export default function AdminCommandCenterPage() {
   const queryClient = useQueryClient()
-  const token = getAdminToken()
+  const { game, connectionState } = useAdminRouteContext()
   const [startForm, setStartForm] = useState<StartRoundForm>(defaultStartRoundForm)
   const [extendSeconds, setExtendSeconds] = useState("60")
   const [actionError, setActionError] = useState<string | null>(null)
@@ -69,11 +69,6 @@ export default function AdminCommandCenterPage() {
     submissionId: null,
   })
 
-  const game = useQuery({
-    queryKey: ["game", "state", "admin"],
-    queryFn: adminApi.gameState,
-    refetchInterval: 10_000,
-  })
   const teams = useQuery({
     queryKey: ["admin", "teams", { enabled: null, search: "" }],
     queryFn: () => adminApi.teams({ enabled: null, search: "" }),
@@ -97,12 +92,6 @@ export default function AdminCommandCenterPage() {
     queryKey: ["admin", "blackboard", "control"],
     queryFn: adminApi.blackboardControl,
     refetchInterval: 2_000,
-  })
-
-  const connectionState = useGameEvents({
-    token,
-    onSnapshot: (snapshot) => queryClient.setQueryData(["game", "state", "admin"], snapshot),
-    onError: () => undefined,
   })
 
   const snapshot = game.data
@@ -1025,12 +1014,6 @@ function PreviewSessionLane({
   const localRun = localRunId ? session.runs.find((run) => run.id === localRunId) ?? null : null
   const selectedRun = localRun ?? boardRun ?? session.runs[0] ?? null
   const isSelectedOnBoard = Boolean(selectedRun && onBoard && selectedRun.id === selectedPreviewRunId)
-
-  useEffect(() => {
-    if (localRunId && !session.runs.some((run) => run.id === localRunId)) {
-      setLocalRunId(null)
-    }
-  }, [localRunId, session.runs])
 
   return (
     <article className={cn(
