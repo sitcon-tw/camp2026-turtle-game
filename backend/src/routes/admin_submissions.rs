@@ -16,7 +16,10 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/submissions", get(list_submissions))
-        .route("/admin/submissions/{submission_id}", get(get_submission))
+        .route(
+            "/admin/submissions/{submission_id}",
+            get(get_submission).delete(delete_submission),
+        )
         .route(
             "/admin/submissions/{submission_id}/retry",
             post(retry_submission),
@@ -45,6 +48,46 @@ async fn get_submission(
     Ok(Json(submission))
 }
 
+async fn delete_submission(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path(submission_id): Path<SubmissionId>,
+) -> Result<Json<DeleteSubmissionResponse>, AppError> {
+    require_admin(&user)?;
+    let submission = state
+        .repository
+        .get_submission(submission_id)?
+        .ok_or_else(|| AppError::not_found("submission was not found"))?;
+    state
+        .repository
+        .delete_submissions_and_score_events(&[submission.id])?;
+    state.repository.recalculate_scores_from_events()?;
+    if state
+        .blackboard
+        .selected_submission_id()?
+        .is_some_and(|selected_submission_id| selected_submission_id == submission.id)
+    {
+        state.blackboard.set_selected_submission_id(None)?;
+        state
+            .event_bus
+            .publish(crate::state::AppEvent::BlackboardPlaybackChanged {
+                submission_id: None,
+            });
+        state
+            .event_bus
+            .publish(crate::state::AppEvent::BlackboardDisplayChanged {
+                display: state.blackboard.display()?,
+            });
+    }
+    state
+        .event_bus
+        .publish(crate::state::AppEvent::LeaderboardUpdated);
+    Ok(Json(DeleteSubmissionResponse {
+        deleted: true,
+        submission_id: submission.id,
+    }))
+}
+
 async fn retry_submission(
     State(state): State<AppState>,
     user: AuthenticatedUser,
@@ -70,6 +113,12 @@ async fn retry_submission(
 #[derive(Debug, Serialize)]
 struct RetryResponse {
     submission: Submission,
+}
+
+#[derive(Debug, Serialize)]
+struct DeleteSubmissionResponse {
+    deleted: bool,
+    submission_id: SubmissionId,
 }
 
 fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {

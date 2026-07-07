@@ -6,6 +6,7 @@ import {
   PlayIcon,
   RefreshCwIcon,
   StepForwardIcon,
+  Trash2Icon,
   TrophyIcon,
   XIcon,
 } from "lucide-react"
@@ -173,6 +174,20 @@ export default function AdminCommandCenterPage() {
     onError: (error) => setActionError(errorMessage(error)),
   })
 
+  const deleteSubmission = useMutation({
+    mutationFn: (submission: GameSubmission) => adminApi.deleteSubmission(submission.id),
+    onSuccess: async () => {
+      setActionError(null)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["game", "state", "admin"] }),
+        queryClient.invalidateQueries({ queryKey: ["leaderboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["public", "blackboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin", "blackboard", "control"] }),
+      ])
+    },
+    onError: (error) => setActionError(errorMessage(error)),
+  })
+
   const clearBlackboardPlayback = useMutation({
     mutationFn: adminApi.clearBlackboardPlayback,
     onSuccess: async () => {
@@ -314,6 +329,9 @@ export default function AdminCommandCenterPage() {
         isPlayingSubmission={playSubmission.isPending}
         isClearingBlackboard={clearBlackboardPlayback.isPending}
         onPlaySubmission={(submissionId) => playSubmission.mutate(submissionId)}
+        deletingSubmissionId={deleteSubmission.variables?.id ?? null}
+        isDeletingSubmission={deleteSubmission.isPending}
+        onDeleteSubmission={(submission) => deleteSubmission.mutateAsync(submission)}
         onClearBlackboard={() => clearBlackboardPlayback.mutate()}
         onSelectPreviewRun={(previewRunId) => setBlackboardDisplay.mutate({ mode: "preview", preview_run_id: previewRunId })}
         onRefresh={() => {
@@ -599,6 +617,9 @@ function BlackboardControlPanel({
   isPlayingSubmission,
   isClearingBlackboard,
   onPlaySubmission,
+  deletingSubmissionId,
+  isDeletingSubmission,
+  onDeleteSubmission,
   onClearBlackboard,
   onSelectPreviewRun,
   onRefresh,
@@ -615,6 +636,9 @@ function BlackboardControlPanel({
   isPlayingSubmission: boolean
   isClearingBlackboard: boolean
   onPlaySubmission: (submissionId: string) => void
+  deletingSubmissionId: string | null
+  isDeletingSubmission: boolean
+  onDeleteSubmission: (submission: GameSubmission) => Promise<unknown>
   onClearBlackboard: () => void
   onSelectPreviewRun: (previewRunId: string) => void
   onRefresh: () => void
@@ -689,6 +713,9 @@ function BlackboardControlPanel({
               isPlayingSubmission={isPlayingSubmission}
               isClearingBlackboard={isClearingBlackboard}
               onPlaySubmission={onPlaySubmission}
+              deletingSubmissionId={deletingSubmissionId}
+              isDeletingSubmission={isDeletingSubmission}
+              onDeleteSubmission={onDeleteSubmission}
               onClearBlackboard={onClearBlackboard}
             />
           </TabsContent>
@@ -939,6 +966,9 @@ function SubmissionReplayDeck({
   isPlayingSubmission,
   isClearingBlackboard,
   onPlaySubmission,
+  deletingSubmissionId,
+  isDeletingSubmission,
+  onDeleteSubmission,
   onClearBlackboard,
 }: {
   snapshot: GameStateResponse
@@ -950,6 +980,9 @@ function SubmissionReplayDeck({
   isPlayingSubmission: boolean
   isClearingBlackboard: boolean
   onPlaySubmission: (submissionId: string) => void
+  deletingSubmissionId: string | null
+  isDeletingSubmission: boolean
+  onDeleteSubmission: (submission: GameSubmission) => Promise<unknown>
   onClearBlackboard: () => void
 }) {
   const [activeSubmissionTeamId, setActiveSubmissionTeamId] = useState<string | null>(null)
@@ -1039,6 +1072,9 @@ function SubmissionReplayDeck({
                   playingSubmissionId={playingSubmissionId}
                   isPlayingSubmission={isPlayingSubmission}
                   onPlaySubmission={onPlaySubmission}
+                  deletingSubmissionId={deletingSubmissionId}
+                  isDeletingSubmission={isDeletingSubmission}
+                  onDeleteSubmission={onDeleteSubmission}
                 />
               </div>
             </div>
@@ -1058,6 +1094,9 @@ function SubmissionTeamLane({
   playingSubmissionId,
   isPlayingSubmission,
   onPlaySubmission,
+  deletingSubmissionId,
+  isDeletingSubmission,
+  onDeleteSubmission,
 }: {
   submissions: GameSubmission[]
   challenge: GameStateResponse["challenge"]
@@ -1067,6 +1106,9 @@ function SubmissionTeamLane({
   playingSubmissionId: string | null
   isPlayingSubmission: boolean
   onPlaySubmission: (submissionId: string) => void
+  deletingSubmissionId: string | null
+  isDeletingSubmission: boolean
+  onDeleteSubmission: (submission: GameSubmission) => Promise<unknown>
 }) {
   const [localSubmissionId, setLocalSubmissionId] = useState<string | null>(null)
   const boardSubmission = blackboardSelectedSubmissionId
@@ -1129,17 +1171,38 @@ function SubmissionTeamLane({
           ))}
         </div>
       </div>
-      <Button
-        disabled={!selectedSubmission || !selectedCanPlay || isPlayingSubmission}
-        onClick={() => selectedSubmission ? onPlaySubmission(selectedSubmission.id) : undefined}
-      >
-        {isPlayingSubmission && playingSubmissionId === selectedSubmission?.id ? (
-          <Loader2Icon data-icon="inline-start" className="animate-spin" />
-        ) : (
-          <PlayIcon data-icon="inline-start" />
-        )}
-        {isSelectedOnBoard ? "正在黑板上" : "播放至黑板"}
-      </Button>
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <Button
+          disabled={!selectedSubmission || !selectedCanPlay || isPlayingSubmission}
+          onClick={() => selectedSubmission ? onPlaySubmission(selectedSubmission.id) : undefined}
+        >
+          {isPlayingSubmission && playingSubmissionId === selectedSubmission?.id ? (
+            <Loader2Icon data-icon="inline-start" className="animate-spin" />
+          ) : (
+            <PlayIcon data-icon="inline-start" />
+          )}
+          {isSelectedOnBoard ? "正在黑板上" : "播放至黑板"}
+        </Button>
+        <ConfirmAction
+          title="刪除這筆提交？"
+          description={`將永久刪除 ${teamName} #${selectedSubmission?.attempt_no ?? ""}，並移除相關計分紀錄。此操作無法復原。`}
+          confirmLabel="刪除提交"
+          destructive
+          disabled={!selectedSubmission || isDeletingSubmission}
+          onConfirm={async () => {
+            if (selectedSubmission) await onDeleteSubmission(selectedSubmission)
+          }}
+        >
+          <Button variant="destructive" disabled={!selectedSubmission || isDeletingSubmission}>
+            {isDeletingSubmission && deletingSubmissionId === selectedSubmission?.id ? (
+              <Loader2Icon data-icon="inline-start" className="animate-spin" />
+            ) : (
+              <Trash2Icon data-icon="inline-start" />
+            )}
+            刪除
+          </Button>
+        </ConfirmAction>
+      </div>
     </article>
   )
 }

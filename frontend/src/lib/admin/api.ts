@@ -224,6 +224,12 @@ export const adminApi = {
       { method: "POST", body: jsonBody({}) },
     )
   },
+  deleteSubmission(submissionId: string) {
+    return request<{ deleted: boolean; submission_id: string }>(
+      `/api/v1/admin/submissions/${submissionId}`,
+      { method: "DELETE" },
+    )
+  },
   clearBlackboardPlayback() {
     return request<{ selected_submission_id: string | null }>("/api/v1/admin/blackboard/playback", {
       method: "DELETE",
