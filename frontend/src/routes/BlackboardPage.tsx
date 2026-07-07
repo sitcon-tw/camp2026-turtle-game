@@ -1077,19 +1077,24 @@ function ResultStat({ label, value, detail }: { label: string; value: string | n
 function LeaderboardPanel({ leaderboard, results }: { leaderboard: LeaderboardEntry[]; results: RoundResultEntry[] }) {
   const resultByTeam = useMemo(() => new Map(results.map((result) => [result.team_id, result])), [results])
   const rows = leaderboard.length > 0 ? leaderboard : []
+  const isCompact = rows.length >= 8
+  const isDense = rows.length >= 11
 
   return (
     <section className="animate-in fade-in slide-in-from-right-4 grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[1rem] border-2 border-ink bg-surface-raised duration-700 shadow-[3px_3px_0_rgba(23,35,58,0.12)]">
-      <header className="flex items-center justify-between gap-4 border-b-2 border-ink bg-card/90 px-4 py-3">
+      <header className={cn("flex items-center justify-between gap-4 border-b-2 border-ink bg-card/90 px-4", isCompact ? "py-2" : "py-3")}>
         <div className="min-w-0">
-          <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <div className={cn("flex items-center gap-2 font-medium text-muted-foreground", isCompact ? "text-xs" : "text-sm")}>
             <TrophyIcon data-icon="inline-start" />
             Leaderboard
           </div>
-          <div className="truncate text-2xl font-semibold lg:text-3xl">總分排行</div>
+          <div className={cn("truncate font-semibold", isCompact ? "text-xl lg:text-2xl" : "text-2xl lg:text-3xl")}>總分排行</div>
         </div>
       </header>
-      <div className="grid min-h-0 gap-2 p-3" style={{ gridTemplateRows: `repeat(${Math.max(rows.length, 1)}, minmax(0, 1fr))` }}>
+      <div
+        className={cn("grid min-h-0", isDense ? "gap-1 p-2" : isCompact ? "gap-1.5 p-2" : "gap-2 p-3")}
+        style={{ gridTemplateRows: `repeat(${Math.max(rows.length, 1)}, minmax(0, 1fr))` }}
+      >
         {rows.length === 0 ? (
           <div className="flex items-center justify-center rounded-[0.875rem] border-2 border-dashed border-border bg-background/70 text-muted-foreground">
             尚無分數
@@ -1102,22 +1107,34 @@ function LeaderboardPanel({ leaderboard, results }: { leaderboard: LeaderboardEn
             return (
               <div
                 key={team.team_id}
+                data-leaderboard-row
                 className={cn(
-                  "animate-in fade-in slide-in-from-bottom-3 grid min-h-0 grid-cols-[3.25rem_minmax(0,1fr)_auto] items-center gap-3 rounded-[0.875rem] border border-border bg-background/75 px-3 py-2 duration-500 shadow-[1px_1px_0_rgba(23,35,58,0.08)]",
+                  "animate-in fade-in slide-in-from-bottom-3 grid min-h-0 items-center border border-border bg-background/75 duration-500 shadow-[1px_1px_0_rgba(23,35,58,0.08)]",
+                  isDense
+                    ? "grid-cols-[2.35rem_minmax(0,1fr)_auto] gap-2 rounded-[0.625rem] px-2 py-1"
+                    : isCompact
+                      ? "grid-cols-[2.75rem_minmax(0,1fr)_auto] gap-2 rounded-[0.75rem] px-2.5 py-1.5"
+                      : "grid-cols-[3.25rem_minmax(0,1fr)_auto] gap-3 rounded-[0.875rem] px-3 py-2",
                   displayRank === 1 ? "ring-2 ring-primary/25" : undefined,
                 )}
                 style={{ animationDelay: `${index * 120}ms` }}
               >
-                <div className="font-mono text-2xl font-semibold tabular-nums lg:text-3xl">#{displayRank}</div>
+                <div className={cn("font-mono font-semibold tabular-nums", isDense ? "text-lg lg:text-xl" : isCompact ? "text-xl lg:text-2xl" : "text-2xl lg:text-3xl")}>
+                  #{displayRank}
+                </div>
                 <div className="min-w-0">
-                  <div className="truncate text-lg font-semibold lg:text-2xl">{team.team_name}</div>
-                  <div className="truncate text-xs text-muted-foreground lg:text-sm">
+                  <div className={cn("truncate font-semibold", isDense ? "text-sm lg:text-base" : isCompact ? "text-base lg:text-xl" : "text-lg lg:text-2xl")}>
+                    {team.team_name}
+                  </div>
+                  <div className={cn("truncate text-muted-foreground", isDense ? "text-[0.6875rem]" : "text-xs lg:text-sm")}>
                     {roundPoints > 0 ? `本回合 +${roundPoints}` : `解出 ${team.solved_count}`}
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-col items-end leading-none">
-                  <div className="font-mono text-2xl font-semibold tabular-nums lg:text-4xl">{team.total_score}</div>
-                  {roundPoints !== 0 ? (
+                  <div className={cn("font-mono font-semibold tabular-nums", isDense ? "text-lg lg:text-2xl" : isCompact ? "text-xl lg:text-3xl" : "text-2xl lg:text-4xl")}>
+                    {team.total_score}
+                  </div>
+                  {roundPoints !== 0 && !isCompact ? (
                     <div className={cn("mt-1 font-mono text-xs font-black tabular-nums lg:text-sm", scoreDiffClass(roundPoints))}>
                       {formatScoreDiff(roundPoints)}
                     </div>
