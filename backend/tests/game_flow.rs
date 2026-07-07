@@ -194,6 +194,68 @@ async fn backend_auto_advances_phase_when_deadline_passes() {
 }
 
 #[tokio::test]
+async fn admin_can_reopen_submissions_after_auto_advance() {
+    let fixture = Fixture::new();
+    let app = router(fixture.state.clone());
+
+    let start = json_request(
+        app.clone(),
+        Method::POST,
+        "/api/v1/admin/game/rounds",
+        Some(&fixture.admin_token),
+        json!({
+            "challenge_id": fixture.challenge.id,
+            "submission_seconds": 120,
+            "public_votes_per_team": 3
+        }),
+    )
+    .await;
+    assert_eq!(start.status(), StatusCode::CREATED);
+
+    let expired_deadline = chrono::Utc::now() - chrono::Duration::seconds(1);
+    let timer = json_request(
+        app.clone(),
+        Method::PATCH,
+        "/api/v1/admin/game/timer",
+        Some(&fixture.admin_token),
+        json!({ "phase_ends_at": expired_deadline }),
+    )
+    .await;
+    assert_eq!(timer.status(), StatusCode::OK);
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let reopen = json_request(
+        app.clone(),
+        Method::POST,
+        "/api/v1/admin/game/phase",
+        Some(&fixture.admin_token),
+        json!({ "phase": GamePhase::SubmissionOpen }),
+    )
+    .await;
+    assert_eq!(reopen.status(), StatusCode::OK);
+    let reopen_body = response_json(reopen).await;
+    assert_eq!(reopen_body["state"]["phase"], "submission_open");
+    let reopened_deadline = reopen_body["state"]["phase_ends_at"]
+        .as_str()
+        .expect("submission phase has a deadline");
+    let server_now = reopen_body["state"]["server_now"]
+        .as_str()
+        .expect("server now is present");
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(reopened_deadline).expect("deadline parses")
+            > chrono::DateTime::parse_from_rfc3339(server_now).expect("server now parses")
+    );
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let state = get_request(app, "/api/v1/game/state", Some(&fixture.admin_token)).await;
+    assert_eq!(state.status(), StatusCode::OK);
+    let body = response_json(state).await;
+    assert_eq!(body["state"]["phase"], "submission_open");
+}
+
+#[tokio::test]
 async fn game_rejects_actions_outside_their_phase_and_invalid_public_votes() {
     let fixture = Fixture::new();
     let app = router(fixture.state.clone());
