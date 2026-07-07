@@ -215,7 +215,7 @@ function blackboardState(roundSubmissions: GameSubmission[], selectedSubmissionI
         phase_started_at: "2026-07-04T00:00:00.000Z",
         phase_ends_at: "2026-07-04T00:10:00.000Z",
         public_votes_per_team: 3,
-        team_selection_seconds: 60,
+        team_selection_seconds: 180,
         updated_at: "2026-07-04T00:00:00.000Z",
         updated_by: "admin",
         server_now: "2026-07-04T00:00:00.000Z",

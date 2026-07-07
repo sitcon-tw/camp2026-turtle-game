@@ -1460,7 +1460,7 @@ impl Default for GameInner {
             phase_started_at: now,
             phase_ends_at: None,
             public_votes_per_team: 3,
-            team_selection_seconds: 60,
+            team_selection_seconds: 180,
             updated_at: now,
             updated_by: None,
             rounds: HashMap::new(),
