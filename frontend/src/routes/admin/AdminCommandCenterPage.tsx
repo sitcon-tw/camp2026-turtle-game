@@ -1058,11 +1058,6 @@ function PreviewSessionLane({
         showTarget={false}
         showTurtle
       />
-      <div className="grid grid-cols-3 gap-2 text-center">
-        <ReplayStat label="最新預覽" value={formatSubmissionTime(session.latest_preview_at)} />
-        <ReplayStat label="保留" value={`${session.runs.length}/5`} />
-        <ReplayStat label="Session" value={session.label.replace("Session ", "#")} />
-      </div>
       <div className="min-w-0 overflow-x-auto pb-1">
         <div className="flex gap-2">
           {session.runs.map((run, index) => (
